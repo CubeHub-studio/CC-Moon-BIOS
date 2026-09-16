@@ -1,0 +1,110 @@
+-- Moon BIOS Updater
+-- Updates startup to the latest live Moon BIOS version
+
+local url = "https://cubehub-studio.github.io/CC-Moon-BIOS/startup"
+local startup = "startup"
+local backup = "startup.backup"
+
+term.setBackgroundColor(colors.black)
+term.setTextColor(colors.white)
+term.clear()
+term.setCursorPos(1, 1)
+
+print("========================================")
+print("        MOON BIOS UPDATER")
+print("========================================")
+print()
+print("Downloading latest Moon BIOS...")
+print()
+
+-- Make sure HTTP is available
+if not http then
+    print("ERROR: HTTP is not available.")
+    print()
+    print("Enable HTTP in the ComputerCraft")
+    print("computer configuration.")
+    print()
+    print("Press any key to exit.")
+    os.pullEvent("key")
+    return
+end
+
+-- Download to a temporary file first
+local tempFile = "startup.new"
+
+if fs.exists(tempFile) then
+    fs.delete(tempFile)
+end
+
+local response = http.get(url)
+
+if not response then
+    print("ERROR: Could not download Moon BIOS.")
+    print()
+    print("URL:")
+    print(url)
+    print()
+    print("The current startup file was NOT changed.")
+    print()
+    print("Press any key to exit.")
+    os.pullEvent("key")
+    return
+end
+
+local data = response.readAll()
+response.close()
+
+if not data or data == "" then
+    print("ERROR: Downloaded file is empty.")
+    print()
+    print("The current startup file was NOT changed.")
+    print()
+    print("Press any key to exit.")
+    os.pullEvent("key")
+    return
+end
+
+-- Save downloaded version
+local handle = fs.open(tempFile, "w")
+
+if not handle then
+    print("ERROR: Could not create temporary file.")
+    print()
+    print("Press any key to exit.")
+    os.pullEvent("key")
+    return
+end
+
+handle.write(data)
+handle.close()
+
+print("Download complete.")
+print()
+
+-- Backup current startup if it exists
+if fs.exists(startup) then
+    print("Backing up current startup...")
+
+    if fs.exists(backup) then
+        fs.delete(backup)
+    end
+
+    fs.move(startup, backup)
+end
+
+-- Replace startup with downloaded version
+print("Installing latest Moon BIOS...")
+
+fs.move(tempFile, startup)
+
+print()
+print("========================================")
+print("          UPDATE COMPLETE")
+print("========================================")
+print()
+print("Moon BIOS has been updated.")
+print()
+print("The computer will restart in 3 seconds.")
+sleep(3)
+
+os.reboot()
