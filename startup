@@ -1,7 +1,7 @@
 -- ============================================================
 -- Moon BIOS
 -- startup.lua
--- CC:Tweaked compatible
+-- CC:Tweaked 1.113.1
 -- ============================================================
 
 local bootFile = "bootfile"
@@ -75,20 +75,9 @@ end
 -- ============================================================
 
 local function runBootFile(path)
-    -- Boot errors use black
     bootBackground()
 
     if not fs.exists(path) then
-        print("Moon BIOS")
-        print()
-        print("BOOT FILE NOT FOUND")
-        print()
-        print("Expected:")
-        print("  " .. path)
-        print()
-        print("Press any key to enter BIOS.")
-
-        os.pullEvent("key")
         return false
     end
 
@@ -186,21 +175,20 @@ end
 boot = function()
     logo()
 
-    if not fs.exists(bootFile) then
-        print()
-        print("BOOT FILE NOT FOUND")
-        print()
-        print("Expected:")
-        print("  " .. bootFile)
-        print()
-        print("Press any key to enter BIOS.")
+    -- ========================================================
+    -- NO BOOTFILE = AUTOMATICALLY ENTER BIOS
+    -- ========================================================
 
-        os.pullEvent("key")
+    if not fs.exists(bootFile) then
+        sleep(0.5)
         bios()
         return
     end
 
-    -- Invisible 5-second BIOS entry window
+    -- ========================================================
+    -- 5-SECOND BIOS ENTRY WINDOW
+    -- ========================================================
+
     local timer = os.startTimer(bootDelay)
 
     while true do
@@ -217,10 +205,13 @@ boot = function()
         end
     end
 
-    -- Automatically boot bootfile
+    -- ========================================================
+    -- AUTOMATICALLY BOOT BOOTFILE
+    -- ========================================================
+
     runBootFile(bootFile)
 
-    -- If bootfile exits, return to BIOS
+    -- If the bootfile exits, return to BIOS
     bios()
 end
 
