@@ -1,0 +1,426 @@
+-- ============================================================
+-- Moon BIOS
+-- startup.lua
+-- CC:Tweaked compatible
+-- ============================================================
+
+local bootFile = "bootfile"
+local bootDelay = 5
+
+local bios
+local boot
+local fileManager
+local systemInfo
+local chooseBootFile
+local computerCraftShell
+
+-- ============================================================
+-- BOOT SCREEN BACKGROUND
+-- ============================================================
+
+local function bootBackground()
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.white)
+    term.clear()
+    term.setCursorPos(1, 1)
+end
+
+-- ============================================================
+-- BIOS BACKGROUND
+-- ============================================================
+
+local function biosBackground()
+    term.setBackgroundColor(colors.lightBlue)
+    term.setTextColor(colors.white)
+    term.clear()
+    term.setCursorPos(1, 1)
+end
+
+-- ============================================================
+-- MOON BIOS LOGO
+-- ============================================================
+
+local function logo()
+    bootBackground()
+
+    local moon = {
+        "             ######",
+        "           #######",
+        "        #########",
+        "      #########",
+        "     ########",
+        "    #######",
+        "    #####",
+        "     #######",
+        "      ########",
+        "       ########",
+        "        #########",
+        "           #######",
+        "             ######"
+    }
+
+    for _, row in ipairs(moon) do
+        print(row)
+    end
+
+    print()
+    print("             Moon BIOS")
+    print()
+    print("Booting...")
+    print("Press 1 during boot to enter BIOS")
+end
+
+-- ============================================================
+-- RUN BOOT FILE
+-- ============================================================
+
+local function runBootFile(path)
+    -- Boot errors use black
+    bootBackground()
+
+    if not fs.exists(path) then
+        print("Moon BIOS")
+        print()
+        print("BOOT FILE NOT FOUND")
+        print()
+        print("Expected:")
+        print("  " .. path)
+        print()
+        print("Press any key to enter BIOS.")
+
+        os.pullEvent("key")
+        return false
+    end
+
+    if fs.isDir(path) then
+        print("Moon BIOS")
+        print()
+        print("BOOT ERROR")
+        print()
+        print(path .. " is a directory.")
+        print()
+        print("Press any key to enter BIOS.")
+
+        os.pullEvent("key")
+        return false
+    end
+
+    local handle, err = fs.open(path, "r")
+
+    if not handle then
+        print("Moon BIOS")
+        print()
+        print("BOOT ERROR")
+        print()
+        print(tostring(err))
+        print()
+        print("Press any key to enter BIOS.")
+
+        os.pullEvent("key")
+        return false
+    end
+
+    local source = handle.readAll()
+    handle.close()
+
+    if not source or source == "" then
+        print("Moon BIOS")
+        print()
+        print("BOOT ERROR")
+        print()
+        print("Boot file is empty.")
+        print()
+        print("Press any key to enter BIOS.")
+
+        os.pullEvent("key")
+        return false
+    end
+
+    local program, loadError = load(
+        source,
+        "@" .. path,
+        "t",
+        _ENV
+    )
+
+    if not program then
+        print("Moon BIOS - BOOT ERROR")
+        print()
+        print("File:")
+        print(path)
+        print()
+        print(tostring(loadError))
+        print()
+        print("Press any key to enter BIOS.")
+
+        os.pullEvent("key")
+        return false
+    end
+
+    local ok, runtimeError = pcall(program)
+
+    if not ok then
+        bootBackground()
+
+        print("Moon BIOS - BOOT ERROR")
+        print()
+        print("File:")
+        print(path)
+        print()
+        print("Error:")
+        print(tostring(runtimeError))
+        print()
+        print("Press any key to enter BIOS.")
+
+        os.pullEvent("key")
+        return false
+    end
+
+    return true
+end
+
+-- ============================================================
+-- BOOT
+-- ============================================================
+
+boot = function()
+    logo()
+
+    if not fs.exists(bootFile) then
+        print()
+        print("BOOT FILE NOT FOUND")
+        print()
+        print("Expected:")
+        print("  " .. bootFile)
+        print()
+        print("Press any key to enter BIOS.")
+
+        os.pullEvent("key")
+        bios()
+        return
+    end
+
+    -- Invisible 5-second BIOS entry window
+    local timer = os.startTimer(bootDelay)
+
+    while true do
+        local event, param = os.pullEvent()
+
+        if event == "key" and param == keys.one then
+            os.cancelTimer(timer)
+            bios()
+            return
+        end
+
+        if event == "timer" and param == timer then
+            break
+        end
+    end
+
+    -- Automatically boot bootfile
+    runBootFile(bootFile)
+
+    -- If bootfile exits, return to BIOS
+    bios()
+end
+
+-- ============================================================
+-- FILE MANAGER
+-- ============================================================
+
+fileManager = function()
+    biosBackground()
+
+    print("================================================")
+    print("                 FILE MANAGER")
+    print("================================================")
+    print()
+
+    local files = fs.list("/")
+
+    for _, file in ipairs(files) do
+        if file ~= "startup" and file ~= "startup.lua" then
+            if fs.isDir("/" .. file) then
+                print("[DIR]  " .. file)
+            else
+                print("[FILE] " .. file)
+            end
+        end
+    end
+
+    print()
+    print("Press any key to return to BIOS.")
+
+    os.pullEvent("key")
+end
+
+-- ============================================================
+-- SYSTEM INFORMATION
+-- ============================================================
+
+systemInfo = function()
+    biosBackground()
+
+    print("================================================")
+    print("              SYSTEM INFORMATION")
+    print("================================================")
+    print()
+
+    print("BIOS:          Moon BIOS")
+    print("Version:       1.0")
+    print("Platform:      ComputerCraft")
+    print("Boot file:     " .. bootFile)
+
+    if fs.exists(bootFile) then
+        print("Boot status:   FOUND")
+    else
+        print("Boot status:   NOT FOUND")
+    end
+
+    print()
+    print("Computer ID:   " .. tostring(os.getComputerID()))
+
+    local label = os.getComputerLabel()
+
+    print("Computer Label:")
+
+    if label then
+        print("               " .. label)
+    else
+        print("               <not set>")
+    end
+
+    print()
+    print("Press any key to return to BIOS.")
+
+    os.pullEvent("key")
+end
+
+-- ============================================================
+-- CHOOSE BOOT FILE
+-- ============================================================
+
+chooseBootFile = function()
+    biosBackground()
+
+    print("================================================")
+    print("                BOOT FILE SELECT")
+    print("================================================")
+    print()
+
+    print("Current boot file:")
+    print("  " .. bootFile)
+    print()
+
+    print("Examples:")
+    print("  bootfile")
+    print("  bootfile.lua")
+    print("  disk/bootfile")
+    print("  disk/bootfile.lua")
+    print()
+
+    write("New boot file: ")
+
+    local newFile = read()
+
+    if newFile and newFile ~= "" then
+        newFile = newFile:gsub("^%s+", "")
+        newFile = newFile:gsub("%s+$", "")
+        bootFile = newFile
+    end
+
+    print()
+    print("Boot file: " .. bootFile)
+
+    if fs.exists(bootFile) then
+        print("Status: FOUND")
+    else
+        print("Status: NOT FOUND")
+    end
+
+    print()
+    print("Press any key to return to BIOS.")
+
+    os.pullEvent("key")
+end
+
+-- ============================================================
+-- COMPUTERCRAFT SHELL
+-- ============================================================
+
+computerCraftShell = function()
+    biosBackground()
+
+    print("Starting ComputerCraft Shell...")
+    sleep(0.5)
+
+    shell.run("shell")
+end
+
+-- ============================================================
+-- BIOS
+-- ============================================================
+
+bios = function()
+    while true do
+        biosBackground()
+
+        print("================================================")
+        print("                 MOON BIOS")
+        print("================================================")
+        print()
+        print("Moon BIOS Setup Utility")
+        print()
+
+        print("System Information")
+        print("------------------")
+        print("ComputerCraft BIOS")
+        print("Boot device: ComputerCraft Filesystem")
+        print("Boot file:   " .. bootFile)
+        print()
+
+        print("Boot Configuration")
+        print("------------------")
+        print("1. Boot " .. bootFile)
+        print("2. File Manager")
+        print("3. System Information")
+        print("4. Restart")
+        print("5. Shutdown")
+        print("6. ComputerCraft Shell")
+        print("7. Change Boot File")
+        print()
+
+        print("================================================")
+        print("Select an option:")
+
+        local _, key = os.pullEvent("key")
+
+        if key == keys.one then
+            boot()
+
+        elseif key == keys.two then
+            fileManager()
+
+        elseif key == keys.three then
+            systemInfo()
+
+        elseif key == keys.four then
+            os.reboot()
+
+        elseif key == keys.five then
+            os.shutdown()
+
+        elseif key == keys.six then
+            computerCraftShell()
+
+        elseif key == keys.seven then
+            chooseBootFile()
+        end
+    end
+end
+
+-- ============================================================
+-- START MOON BIOS
+-- ============================================================
+
+boot()
