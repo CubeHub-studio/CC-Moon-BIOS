@@ -789,7 +789,7 @@ local function calculateSimpleIntegrity(path)
     local hash = 2166136261
 
     for i = 1, #data do
-        hash = (hash ~ string.byte(data, i)) % 4294967296
+        hash = (hash * string.byte(data, i)) % 4294967296
         hash = (hash * 16777619) % 4294967296
     end
 
