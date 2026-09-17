@@ -1,21 +1,37 @@
 -- ============================================================
--- Moon BIOS
--- startup.lua
+-- Moon BIOS 1.1
+-- Complete Firmware
 -- CC:Tweaked 1.113.1
 -- ============================================================
 
-local bootFile = "bootfile"
+local VERSION = "1.1"
+
+local DEFAULT_BOOT_FILE = "bootfile"
+local CONFIG_FILE = "moonbios.cfg"
+local INTEGRITY_FILE = "moonbios.secure"
+
+local bootFile = DEFAULT_BOOT_FILE
 local bootDelay = 5
+local autoBoot = true
+local postEnabled = true
+local safeMode = false
+local secureBoot = false
+local secureBootStrict = false
 
 local bios
 local boot
+local bootManager
 local fileManager
 local systemInfo
+local hardwareInfo
+local settingsMenu
 local chooseBootFile
+local recoveryMenu
 local computerCraftShell
+local securityMenu
 
 -- ============================================================
--- BOOT SCREEN BACKGROUND
+-- SCREEN
 -- ============================================================
 
 local function bootBackground()
@@ -25,10 +41,6 @@ local function bootBackground()
     term.setCursorPos(1, 1)
 end
 
--- ============================================================
--- BIOS BACKGROUND
--- ============================================================
-
 local function biosBackground()
     term.setBackgroundColor(colors.lightBlue)
     term.setTextColor(colors.white)
@@ -36,8 +48,305 @@ local function biosBackground()
     term.setCursorPos(1, 1)
 end
 
+local function pause(message)
+    print()
+    print(message or "Press any key to continue.")
+    os.pullEvent("key")
+end
+
+local function trim(text)
+    if not text then
+        return ""
+    end
+
+    text = text:gsub("^%s+", "")
+    text = text:gsub("%s+$", "")
+
+    return text
+end
+
+local function boolText(value)
+    if value then
+        return "Enabled"
+    end
+
+    return "Disabled"
+end
+
+local function clamp(value, minimum, maximum)
+    if value < minimum then
+        return minimum
+    end
+
+    if value > maximum then
+        return maximum
+    end
+
+    return value
+end
+
 -- ============================================================
--- MOON BIOS LOGO
+-- FILE HELPERS
+-- ============================================================
+
+local function readFile(path)
+    if not fs.exists(path) then
+        return nil
+    end
+
+    if fs.isDir(path) then
+        return nil
+    end
+
+    local handle = fs.open(path, "r")
+
+    if not handle then
+        return nil
+    end
+
+    local data = handle.readAll()
+    handle.close()
+
+    return data
+end
+
+local function writeFile(path, data)
+    local handle = fs.open(path, "w")
+
+    if not handle then
+        return false
+    end
+
+    handle.write(data)
+    handle.close()
+
+    return true
+end
+
+-- ============================================================
+-- SETTINGS
+-- ============================================================
+
+local function saveSettings()
+    local settingsData = {
+        version = VERSION,
+        bootFile = bootFile,
+        bootDelay = bootDelay,
+        autoBoot = autoBoot,
+        postEnabled = postEnabled,
+        safeMode = safeMode,
+        secureBoot = secureBoot,
+        secureBootStrict = secureBootStrict
+    }
+
+    local ok, serialized = pcall(
+        textutils.serialise,
+        settingsData
+    )
+
+    if not ok then
+        return false
+    end
+
+    return writeFile(CONFIG_FILE, serialized)
+end
+
+local function loadSettings()
+    if not fs.exists(CONFIG_FILE) then
+        saveSettings()
+        return
+    end
+
+    local data = readFile(CONFIG_FILE)
+
+    if not data or data == "" then
+        return
+    end
+
+    local ok, settingsData = pcall(
+        textutils.unserialise,
+        data
+    )
+
+    if not ok then
+        return
+    end
+
+    if type(settingsData) ~= "table" then
+        return
+    end
+
+    if type(settingsData.bootFile) == "string" then
+        if settingsData.bootFile ~= "" then
+            bootFile = settingsData.bootFile
+        end
+    end
+
+    if type(settingsData.bootDelay) == "number" then
+        bootDelay = clamp(
+            math.floor(settingsData.bootDelay),
+            0,
+            30
+        )
+    end
+
+    if type(settingsData.autoBoot) == "boolean" then
+        autoBoot = settingsData.autoBoot
+    end
+
+    if type(settingsData.postEnabled) == "boolean" then
+        postEnabled = settingsData.postEnabled
+    end
+
+    if type(settingsData.safeMode) == "boolean" then
+        safeMode = settingsData.safeMode
+    end
+
+    if type(settingsData.secureBoot) == "boolean" then
+        secureBoot = settingsData.secureBoot
+    end
+
+    if type(settingsData.secureBootStrict) == "boolean" then
+        secureBootStrict = settingsData.secureBootStrict
+    end
+end
+
+-- ============================================================
+-- LOCAL INTEGRITY CHECK
+-- ============================================================
+
+local function calculateDigest(text)
+    local h1 = 2166136261
+    local h2 = 16777619
+
+    for i = 1, #text do
+        local byte = string.byte(text, i)
+
+        h1 = bit32.bxor(h1, byte)
+        h1 = (h1 * 16777619) % 4294967296
+
+        h2 = bit32.bxor(
+            h2,
+            (byte + i) % 256
+        )
+
+        h2 = (h2 * 2246822519) % 4294967296
+    end
+
+    return string.format(
+        "%08x%08x",
+        h1,
+        h2
+    )
+end
+
+local function hasIntegrityRecord()
+    return fs.exists(INTEGRITY_FILE)
+end
+
+local function createIntegrityRecord(path)
+    local source = readFile(path)
+
+    if not source then
+        return false
+    end
+
+    local hash = calculateDigest(source)
+
+    return writeFile(
+        INTEGRITY_FILE,
+        hash
+    )
+end
+
+local function verifyLocalIntegrity(path)
+    if not fs.exists(INTEGRITY_FILE) then
+        return false, "No integrity record exists."
+    end
+
+    local expected = readFile(INTEGRITY_FILE)
+
+    if not expected then
+        return false, "Unable to read integrity record."
+    end
+
+    expected = trim(expected)
+
+    if expected == "" then
+        return false, "Integrity record is empty."
+    end
+
+    local source = readFile(path)
+
+    if not source then
+        return false, "Unable to read boot file."
+    end
+
+    local actual = calculateDigest(source)
+
+    if actual == expected then
+        return true, "Integrity check passed."
+    end
+
+    return false, "Integrity check FAILED."
+end
+
+-- ============================================================
+-- CCSecureBoot DETECTION
+-- ============================================================
+
+local function hasCCSecureBoot()
+    return fs.exists(
+        "/rom/modules/main/codesign.lua"
+    )
+end
+
+local function verifySecureBoot(path)
+    if not secureBoot then
+        return true, "Secure Boot disabled."
+    end
+
+    if hasCCSecureBoot() then
+        local ok, module = pcall(
+            dofile,
+            "/rom/modules/main/codesign.lua"
+        )
+
+        if ok and type(module) == "table" then
+            if type(module.verify) == "function" then
+                local verified, result = pcall(
+                    module.verify,
+                    path
+                )
+
+                if verified and result then
+                    return true,
+                        "CCSecureBoot signature verified."
+                end
+
+                return false,
+                    "CCSecureBoot signature verification failed."
+            end
+        end
+    end
+
+    local valid, message =
+        verifyLocalIntegrity(path)
+
+    if valid then
+        return true, message
+    end
+
+    if secureBootStrict then
+        return false,
+            "Strict Secure Boot requires a valid integrity record."
+    end
+
+    return false, message
+end
+
+-- ============================================================
+-- MOON LOGO
 -- ============================================================
 
 local function logo()
@@ -65,9 +374,131 @@ local function logo()
 
     print()
     print("             Moon BIOS")
+    print("             Version " .. VERSION)
     print()
     print("Booting...")
+    print()
     print("Press 1 during boot to enter BIOS")
+    print("Press 2 during boot for Boot Menu")
+    print("Press 3 during boot for Safe Mode")
+end
+
+-- ============================================================
+-- POST
+-- ============================================================
+
+local function post()
+    if not postEnabled then
+        return true
+    end
+
+    bootBackground()
+
+    print("================================================")
+    print("                 MOON BIOS POST")
+    print("================================================")
+    print()
+
+    local tests = {}
+
+    tests[#tests + 1] = {
+        "CPU",
+        function()
+            return type(os.getComputerID) == "function"
+        end
+    }
+
+    tests[#tests + 1] = {
+        "Memory",
+        function()
+            return type(collectgarbage) == "function"
+        end
+    }
+
+    tests[#tests + 1] = {
+        "Filesystem",
+        function()
+            return fs ~= nil
+                and type(fs.exists) == "function"
+                and type(fs.open) == "function"
+        end
+    }
+
+    tests[#tests + 1] = {
+        "Terminal",
+        function()
+            return term ~= nil
+                and type(term.clear) == "function"
+                and type(term.setCursorPos) == "function"
+        end
+    }
+
+    tests[#tests + 1] = {
+        "Peripherals",
+        function()
+            return peripheral ~= nil
+                and type(peripheral.getNames) == "function"
+        end
+    }
+
+    if secureBoot then
+        tests[#tests + 1] = {
+            "Secure Boot",
+            function()
+                return hasCCSecureBoot()
+                    or hasIntegrityRecord()
+            end
+        }
+    end
+
+    local allPassed = true
+
+    for _, test in ipairs(tests) do
+        local name = test[1]
+        local ok, result = pcall(test[2])
+
+        if ok and result then
+            print("[ OK ] " .. name)
+        else
+            print("[FAIL] " .. name)
+            allPassed = false
+        end
+
+        sleep(0.08)
+    end
+
+    print()
+
+    if allPassed then
+        print("POST COMPLETE")
+    else
+        print("POST COMPLETED WITH WARNINGS")
+    end
+
+    sleep(0.7)
+
+    return allPassed
+end
+
+-- ============================================================
+-- BOOT ERROR
+-- ============================================================
+
+local function bootError(title, message)
+    bootBackground()
+
+    print("Moon BIOS")
+    print()
+    print("================================================")
+    print("                  " .. title)
+    print("================================================")
+    print()
+    print(tostring(message))
+    print()
+    print("The boot process has been stopped.")
+    print()
+
+    pause("Press any key to open Recovery.")
 end
 
 -- ============================================================
@@ -78,90 +509,60 @@ local function runBootFile(path)
     bootBackground()
 
     if not fs.exists(path) then
+        bootError(
+            "BOOT ERROR",
+            "Boot file not found:\n" .. path
+        )
+
         return false
     end
 
     if fs.isDir(path) then
-        print("Moon BIOS")
-        print()
-        print("BOOT ERROR")
-        print()
-        print(path .. " is a directory.")
-        print()
-        print("Press any key to enter BIOS.")
+        bootError(
+            "BOOT ERROR",
+            path .. " is a directory."
+        )
 
-        os.pullEvent("key")
         return false
     end
 
-    local handle, err = fs.open(path, "r")
+    if secureBoot then
+        local verified, securityMessage =
+            verifySecureBoot(path)
 
-    if not handle then
-        print("Moon BIOS")
-        print()
-        print("BOOT ERROR")
-        print()
-        print(tostring(err))
-        print()
-        print("Press any key to enter BIOS.")
+        if not verified then
+            bootError(
+                "SECURE BOOT FAILURE",
+                securityMessage
+                .. "\n\nFile: "
+                .. path
+            )
 
-        os.pullEvent("key")
-        return false
+            return false
+        end
     end
 
-    local source = handle.readAll()
-    handle.close()
-
-    if not source or source == "" then
-        print("Moon BIOS")
-        print()
-        print("BOOT ERROR")
-        print()
-        print("Boot file is empty.")
-        print()
-        print("Press any key to enter BIOS.")
-
-        os.pullEvent("key")
-        return false
-    end
-
-    local program, loadError = load(
-        source,
-        "@" .. path,
-        "t",
-        _ENV
+    local ok, result = pcall(
+        function()
+            return shell.run(path)
+        end
     )
 
-    if not program then
-        print("Moon BIOS - BOOT ERROR")
-        print()
-        print("File:")
-        print(path)
-        print()
-        print(tostring(loadError))
-        print()
-        print("Press any key to enter BIOS.")
+    if not ok then
+        bootError(
+            "BOOT RUNTIME ERROR",
+            tostring(result)
+        )
 
-        os.pullEvent("key")
         return false
     end
 
-    local ok, runtimeError = pcall(program)
+    if result == false then
+        bootError(
+            "BOOT FAILURE",
+            "The boot program reported failure."
+        )
 
-    if not ok then
-        bootBackground()
-
-        print("Moon BIOS - BOOT ERROR")
-        print()
-        print("File:")
-        print(path)
-        print()
-        print("Error:")
-        print(tostring(runtimeError))
-        print()
-        print("Press any key to enter BIOS.")
-
-        os.pullEvent("key")
         return false
     end
 
@@ -169,50 +570,64 @@ local function runBootFile(path)
 end
 
 -- ============================================================
--- BOOT
+-- BOOT MANAGER
 -- ============================================================
 
-boot = function()
-    logo()
-
-    -- ========================================================
-    -- NO BOOTFILE = AUTOMATICALLY ENTER BIOS
-    -- ========================================================
-
-    if not fs.exists(bootFile) then
-        sleep(0.5)
-        bios()
-        return
-    end
-
-    -- ========================================================
-    -- 5-SECOND BIOS ENTRY WINDOW
-    -- ========================================================
-
-    local timer = os.startTimer(bootDelay)
-
+bootManager = function()
     while true do
-        local event, param = os.pullEvent()
+        biosBackground()
 
-        if event == "key" and param == keys.one then
-            os.cancelTimer(timer)
-            bios()
+        print("================================================")
+        print("                  BOOT MANAGER")
+        print("================================================")
+        print()
+
+        print("Selected boot target:")
+        print("  " .. bootFile)
+        print()
+
+        if fs.exists(bootFile) then
+            print("Status: FOUND")
+        else
+            print("Status: NOT FOUND")
+        end
+
+        print()
+        print("1. Boot selected file")
+        print("2. Change boot file")
+        print("3. Boot Safe Mode")
+        print("4. Recovery")
+        print("5. Back")
+        print()
+
+        local _, key = os.pullEvent("key")
+
+        if key == keys.one then
+            local previousSafeMode = safeMode
+
+            safeMode = false
+            runBootFile(bootFile)
+
+            safeMode = previousSafeMode
+
+        elseif key == keys.two then
+            chooseBootFile()
+
+        elseif key == keys.three then
+            local previousSafeMode = safeMode
+
+            safeMode = true
+            runBootFile(bootFile)
+
+            safeMode = previousSafeMode
+
+        elseif key == keys.four then
+            recoveryMenu()
+
+        elseif key == keys.five then
             return
         end
-
-        if event == "timer" and param == timer then
-            break
-        end
     end
-
-    -- ========================================================
-    -- AUTOMATICALLY BOOT BOOTFILE
-    -- ========================================================
-
-    runBootFile(bootFile)
-
-    -- If the bootfile exits, return to BIOS
-    bios()
 end
 
 -- ============================================================
@@ -230,9 +645,11 @@ fileManager = function()
     local files = fs.list("/")
 
     for _, file in ipairs(files) do
-        if file ~= "startup" and file ~= "startup.lua" then
+        if file ~= "startup"
+            and file ~= "startup.lua" then
+
             if fs.isDir("/" .. file) then
-                print("[DIR]  " .. file)
+                print("[DIR ] " .. file)
             else
                 print("[FILE] " .. file)
             end
@@ -240,9 +657,76 @@ fileManager = function()
     end
 
     print()
-    print("Press any key to return to BIOS.")
+    pause()
 
-    os.pullEvent("key")
+end
+
+-- ============================================================
+-- HARDWARE INFORMATION
+-- ============================================================
+
+hardwareInfo = function()
+    biosBackground()
+
+    print("================================================")
+    print("                HARDWARE DETECTION")
+    print("================================================")
+    print()
+
+    print(
+        "Computer ID:     "
+        .. tostring(os.getComputerID())
+    )
+
+    print(
+        "Computer Label:  "
+        .. tostring(
+            os.getComputerLabel()
+            or "<not set>"
+        )
+    )
+
+    if os.getComputerCraftVersion then
+        print(
+            "CC:Tweaked:       "
+            .. tostring(
+                os.getComputerCraftVersion()
+            )
+        )
+    end
+
+    print()
+    print("Peripherals:")
+    print("----------------")
+
+    local names = peripheral.getNames()
+
+    if #names == 0 then
+        print("None detected.")
+    else
+        for _, name in ipairs(names) do
+            print()
+            print(name)
+
+            local types = {
+                peripheral.getType(name)
+            }
+
+            if #types > 0 then
+                for _, peripheralType in ipairs(types) do
+                    print(
+                        "  Type: "
+                        .. tostring(peripheralType)
+                    )
+                end
+            else
+                print("  Type: unknown")
+            end
+        end
+    end
+
+    print()
+    pause()
 end
 
 -- ============================================================
@@ -257,45 +741,84 @@ systemInfo = function()
     print("================================================")
     print()
 
-    print("BIOS:          Moon BIOS")
-    print("Version:       1.0")
-    print("Platform:      ComputerCraft")
-    print("Boot file:     " .. bootFile)
+    print("BIOS:            Moon BIOS")
+    print("Version:         " .. VERSION)
+    print("Platform:        ComputerCraft")
+    print("Boot file:       " .. bootFile)
+    print(
+        "Boot delay:      "
+        .. tostring(bootDelay)
+        .. " seconds"
+    )
+
+    print(
+        "Auto Boot:       "
+        .. boolText(autoBoot)
+    )
+
+    print(
+        "POST:            "
+        .. boolText(postEnabled)
+    )
+
+    print(
+        "Safe Mode:       "
+        .. boolText(safeMode)
+    )
+
+    print(
+        "Secure Boot:     "
+        .. boolText(secureBoot)
+    )
+
+    print(
+        "Strict Secure:   "
+        .. boolText(secureBootStrict)
+    )
+
+    print()
 
     if fs.exists(bootFile) then
-        print("Boot status:   FOUND")
+        print("Boot status:     FOUND")
     else
-        print("Boot status:   NOT FOUND")
+        print("Boot status:     NOT FOUND")
+    end
+
+    if hasCCSecureBoot() then
+        print("Secure provider: CCSecureBoot")
+    elseif hasIntegrityRecord() then
+        print("Secure provider: Moon Integrity")
+    else
+        print("Secure provider: None")
     end
 
     print()
-    print("Computer ID:   " .. tostring(os.getComputerID()))
+    print(
+        "Computer ID:     "
+        .. tostring(os.getComputerID())
+    )
 
     local label = os.getComputerLabel()
 
-    print("Computer Label:")
-
     if label then
-        print("               " .. label)
+        print("Computer Label:  " .. label)
     else
-        print("               <not set>")
+        print("Computer Label:  <not set>")
     end
 
     print()
-    print("Press any key to return to BIOS.")
-
-    os.pullEvent("key")
+    pause()
 end
 
 -- ============================================================
--- CHOOSE BOOT FILE
+-- BOOT FILE SELECTION
 -- ============================================================
 
 chooseBootFile = function()
     biosBackground()
 
     print("================================================")
-    print("                BOOT FILE SELECT")
+    print("                 BOOT FILE SELECT")
     print("================================================")
     print()
 
@@ -312,12 +835,11 @@ chooseBootFile = function()
 
     write("New boot file: ")
 
-    local newFile = read()
+    local newFile = trim(read())
 
-    if newFile and newFile ~= "" then
-        newFile = newFile:gsub("^%s+", "")
-        newFile = newFile:gsub("%s+$", "")
+    if newFile ~= "" then
         bootFile = newFile
+        saveSettings()
     end
 
     print()
@@ -330,9 +852,236 @@ chooseBootFile = function()
     end
 
     print()
-    print("Press any key to return to BIOS.")
+    pause()
+end
 
-    os.pullEvent("key")
+-- ============================================================
+-- SETTINGS
+-- ============================================================
+
+settingsMenu = function()
+    while true do
+        biosBackground()
+
+        print("================================================")
+        print("                 BIOS SETTINGS")
+        print("================================================")
+        print()
+
+        print(
+            "1. Boot Delay       "
+            .. tostring(bootDelay)
+            .. " sec"
+        )
+
+        print(
+            "2. Auto Boot        "
+            .. boolText(autoBoot)
+        )
+
+        print(
+            "3. POST             "
+            .. boolText(postEnabled)
+        )
+
+        print(
+            "4. Safe Mode        "
+            .. boolText(safeMode)
+        )
+
+        print(
+            "5. Secure Boot      "
+            .. boolText(secureBoot)
+        )
+
+        print(
+            "6. Strict Secure    "
+            .. boolText(secureBootStrict)
+        )
+
+        print("7. Reset Settings")
+        print("8. Save Settings")
+        print("9. Back")
+        print()
+
+        local _, key = os.pullEvent("key")
+
+        if key == keys.one then
+            biosBackground()
+
+            print("Enter boot delay in seconds (0-30):")
+            write("> ")
+
+            local value = tonumber(read())
+
+            if value then
+                bootDelay = clamp(
+                    math.floor(value),
+                    0,
+                    30
+                )
+            end
+
+        elseif key == keys.two then
+            autoBoot = not autoBoot
+            saveSettings()
+
+        elseif key == keys.three then
+            postEnabled = not postEnabled
+            saveSettings()
+
+        elseif key == keys.four then
+            safeMode = not safeMode
+            saveSettings()
+
+        elseif key == keys.five then
+            secureBoot = not secureBoot
+            saveSettings()
+
+        elseif key == keys.six then
+            secureBootStrict = not secureBootStrict
+            saveSettings()
+
+        elseif key == keys.seven then
+            bootFile = DEFAULT_BOOT_FILE
+            bootDelay = 5
+            autoBoot = true
+            postEnabled = true
+            safeMode = false
+            secureBoot = false
+            secureBootStrict = false
+
+            saveSettings()
+
+        elseif key == keys.eight then
+            saveSettings()
+
+        elseif key == keys.nine then
+            return
+        end
+    end
+end
+
+-- ============================================================
+-- SECURITY
+-- ============================================================
+
+securityMenu = function()
+    while true do
+        biosBackground()
+
+        print("================================================")
+        print("                MOON SECURE BOOT")
+        print("================================================")
+        print()
+
+        print(
+            "Secure Boot:     "
+            .. boolText(secureBoot)
+        )
+
+        print(
+            "Strict Mode:     "
+            .. boolText(secureBootStrict)
+        )
+
+        print()
+
+        if hasCCSecureBoot() then
+            print("Provider:        CCSecureBoot")
+            print("Status:          Cryptographic verification")
+        elseif hasIntegrityRecord() then
+            print("Provider:        Moon Integrity")
+            print("Status:          Local integrity verification")
+        else
+            print("Provider:        None")
+            print("Status:          No verification record")
+        end
+
+        print()
+        print("1. Enable/Disable Secure Boot")
+        print("2. Toggle Strict Mode")
+        print("3. Verify Boot File")
+        print("4. Create Integrity Record")
+        print("5. Delete Integrity Record")
+        print("6. Back")
+        print()
+
+        local _, key = os.pullEvent("key")
+
+        if key == keys.one then
+            secureBoot = not secureBoot
+            saveSettings()
+
+        elseif key == keys.two then
+            secureBootStrict = not secureBootStrict
+            saveSettings()
+
+        elseif key == keys.three then
+            biosBackground()
+
+            print("Verifying:")
+            print(bootFile)
+            print()
+
+            local ok, message =
+                verifySecureBoot(bootFile)
+
+            if ok then
+                print("[ OK ] " .. message)
+            else
+                print("[FAIL] " .. message)
+            end
+
+            pause()
+
+        elseif key == keys.four then
+            biosBackground()
+
+            if not fs.exists(bootFile) then
+                print("Boot file does not exist.")
+            else
+                local ok =
+                    createIntegrityRecord(
+                        bootFile
+                    )
+
+                if ok then
+                    print("Integrity record created.")
+                    print()
+                    print(
+                        "Boot file: "
+                        .. bootFile
+                    )
+                    print()
+                    print(
+                        "The current file contents are now"
+                    )
+                    print(
+                        "registered in Moon BIOS."
+                    )
+                else
+                    print(
+                        "Could not create integrity record."
+                    )
+                end
+            end
+
+            pause()
+
+        elseif key == keys.five then
+            if fs.exists(INTEGRITY_FILE) then
+                fs.delete(INTEGRITY_FILE)
+
+                biosBackground()
+                print("Integrity record deleted.")
+                pause()
+            end
+
+        elseif key == keys.six then
+            return
+        end
+    end
 end
 
 -- ============================================================
@@ -340,6 +1089,27 @@ end
 -- ============================================================
 
 computerCraftShell = function()
+    if secureBoot and secureBootStrict then
+        biosBackground()
+
+        print("================================================")
+        print("             SHELL ACCESS BLOCKED")
+        print("================================================")
+        print()
+        print("Strict Secure Boot is enabled.")
+        print()
+        print(
+            "Disable Strict Secure Boot before"
+        )
+        print(
+            "opening the ComputerCraft shell."
+        )
+
+        pause()
+
+        return
+    end
+
     biosBackground()
 
     print("Starting ComputerCraft Shell...")
@@ -349,7 +1119,151 @@ computerCraftShell = function()
 end
 
 -- ============================================================
--- BIOS
+-- RECOVERY
+-- ============================================================
+
+recoveryMenu = function()
+    while true do
+        biosBackground()
+
+        print("================================================")
+        print("                BOOT RECOVERY")
+        print("================================================")
+        print()
+
+        print("Boot file: " .. bootFile)
+        print()
+
+        print("1. Retry Boot")
+        print("2. Boot Safe Mode")
+        print("3. Boot Manager")
+        print("4. File Manager")
+        print("5. ComputerCraft Shell")
+        print("6. Change Boot File")
+        print("7. Security")
+        print("8. BIOS")
+        print()
+
+        local _, key = os.pullEvent("key")
+
+        if key == keys.one then
+            runBootFile(bootFile)
+
+        elseif key == keys.two then
+            local previousSafeMode = safeMode
+
+            safeMode = true
+            runBootFile(bootFile)
+
+            safeMode = previousSafeMode
+
+        elseif key == keys.three then
+            bootManager()
+
+        elseif key == keys.four then
+            fileManager()
+
+        elseif key == keys.five then
+            computerCraftShell()
+
+        elseif key == keys.six then
+            chooseBootFile()
+
+        elseif key == keys.seven then
+            securityMenu()
+
+        elseif key == keys.eight then
+            return
+        end
+    end
+end
+
+-- ============================================================
+-- BOOT
+-- ============================================================
+
+boot = function()
+    loadSettings()
+
+    logo()
+
+    if postEnabled then
+        sleep(0.25)
+        post()
+    end
+
+    -- Missing boot file automatically opens BIOS.
+    if not fs.exists(bootFile) then
+        sleep(0.5)
+        bios()
+        return
+    end
+
+    if not autoBoot then
+        bios()
+        return
+    end
+
+    -- ========================================================
+    -- HIDDEN BOOT WINDOW
+    -- ========================================================
+
+    local timer = os.startTimer(bootDelay)
+
+    while true do
+        local event, parameter = os.pullEvent()
+
+        if event == "key" then
+
+            if parameter == keys.one then
+                os.cancelTimer(timer)
+                bios()
+                return
+            end
+
+            if parameter == keys.two then
+                os.cancelTimer(timer)
+                bootManager()
+                return
+            end
+
+            if parameter == keys.three then
+                os.cancelTimer(timer)
+
+                local previousSafeMode = safeMode
+
+                safeMode = true
+                runBootFile(bootFile)
+
+                safeMode = previousSafeMode
+
+                bios()
+                return
+            end
+        end
+
+        if event == "timer"
+            and parameter == timer then
+
+            break
+        end
+    end
+
+    -- ========================================================
+    -- AUTOMATIC BOOT
+    -- ========================================================
+
+    local success = runBootFile(bootFile)
+
+    if success then
+        bios()
+    else
+        recoveryMenu()
+    end
+end
+
+-- ============================================================
+-- BIOS MAIN MENU
 -- ============================================================
 
 bios = function()
@@ -361,33 +1275,51 @@ bios = function()
         print("================================================")
         print()
         print("Moon BIOS Setup Utility")
+        print("Version " .. VERSION)
         print()
 
-        print("System Information")
-        print("------------------")
-        print("ComputerCraft BIOS")
-        print("Boot device: ComputerCraft Filesystem")
-        print("Boot file:   " .. bootFile)
+        print("System")
+        print("------")
+
+        print(
+            "Computer ID: "
+            .. tostring(os.getComputerID())
+        )
+
+        print(
+            "Boot file:   "
+            .. bootFile
+        )
+
+        if fs.exists(bootFile) then
+            print("Boot status: FOUND")
+        else
+            print("Boot status: NOT FOUND")
+        end
+
         print()
 
         print("Boot Configuration")
         print("------------------")
-        print("1. Boot " .. bootFile)
+        print("1. Boot Manager")
         print("2. File Manager")
         print("3. System Information")
-        print("4. Restart")
-        print("5. Shutdown")
-        print("6. ComputerCraft Shell")
-        print("7. Change Boot File")
-        print()
+        print("4. Hardware Detection")
+        print("5. BIOS Settings")
+        print("6. Security / Secure Boot")
+        print("7. Recovery")
+        print("8. ComputerCraft Shell")
+        print("9. Restart")
+        print("0. Shutdown")
 
+        print()
         print("================================================")
         print("Select an option:")
 
         local _, key = os.pullEvent("key")
 
         if key == keys.one then
-            boot()
+            bootManager()
 
         elseif key == keys.two then
             fileManager()
@@ -396,16 +1328,25 @@ bios = function()
             systemInfo()
 
         elseif key == keys.four then
-            os.reboot()
+            hardwareInfo()
 
         elseif key == keys.five then
-            os.shutdown()
+            settingsMenu()
 
         elseif key == keys.six then
-            computerCraftShell()
+            securityMenu()
 
         elseif key == keys.seven then
-            chooseBootFile()
+            recoveryMenu()
+
+        elseif key == keys.eight then
+            computerCraftShell()
+
+        elseif key == keys.nine then
+            os.reboot()
+
+        elseif key == keys.zero then
+            os.shutdown()
         end
     end
 end
