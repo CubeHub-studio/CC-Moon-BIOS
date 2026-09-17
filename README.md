@@ -20,3 +20,6 @@ Press one during boot ( if an OS is installed, it will boot BIOS automatically i
 Enter CC Shell
 
 Execute 'updatemoonbios'
+
+
+<img width="1254" height="1254" alt="lclv1 0" src="https://github.com/user-attachments/assets/a9376735-c95c-4776-befb-6f224f5d5b86" />
