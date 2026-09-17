@@ -1,3 +1,7 @@
+This project is licensed under the LUNAR CUBES v1.0 License.
+[OFFICALLY CUBES, STUDIO]
+
+
 How to install:
 
 
