@@ -1,378 +1,414 @@
 -- ============================================================
--- MOON BIOS 1.1
--- Complete BIOS / Boot Manager
--- CC:Tweaked 1.113.1
+-- MOON BIOS 1.2
+-- Complete BIOS / Boot Manager / Recovery Environment
+-- ============================================================
+--
+-- Controls:
+--   Arrow Keys = Navigate
+--   ENTER      = Select
+--   BACKSPACE  = Back
+--   1          = BIOS during boot
+--   2          = Boot Manager during boot
+--   3          = Safe Mode during boot
+--
+-- Escape is intentionally NOT used anywhere.
 -- ============================================================
 
-local VERSION = "1.1"
+local VERSION = "1.2"
+local BUILD = "Moon BIOS 1.2 Complete"
 
-local DEFAULT_BOOT_FILE = "bootfile"
 local CONFIG_FILE = "moonbios.cfg"
-local INTEGRITY_FILE = "moonbios.secure"
+local SECURITY_FILE = "moonbios.secure"
+local LOG_FILE = "moonbios.log"
+local HISTORY_FILE = "moonbios.history"
+local ERROR_FILE = "moonbios.errors"
 
-local bootFile = DEFAULT_BOOT_FILE
-local bootDelay = 5
-local autoBoot = true
-local postEnabled = true
-local safeMode = false
-local secureBoot = false
-local secureBootStrict = false
+local DEFAULT_BOOT = "bootfile"
+
+local colorsAvailable = type(colors) == "table"
+
+local C = {
+    black = colorsAvailable and colors.black or 1,
+    white = colorsAvailable and colors.white or 32768,
+    gray = colorsAvailable and colors.gray or 128,
+    lightGray = colorsAvailable and colors.lightGray or 256,
+    blue = colorsAvailable and colors.blue or 2048,
+    lightBlue = colorsAvailable and colors.lightBlue or 512,
+    cyan = colorsAvailable and colors.cyan or 16,
+    green = colorsAvailable and colors.green or 8192,
+    lime = colorsAvailable and colors.lime or 32,
+    red = colorsAvailable and colors.red or 16384,
+    orange = colorsAvailable and colors.orange or 2,
+    yellow = colorsAvailable and colors.yellow or 16,
+    purple = colorsAvailable and colors.purple or 32
+}
+
+local config = {
+    bootFile = DEFAULT_BOOT,
+    bootDelay = 5,
+    autoBoot = true,
+    postEnabled = true,
+    safeMode = false,
+    secureBoot = true,
+    secureBootStrict = false,
+    passwordEnabled = false,
+    password = "",
+    theme = "blue",
+    bootFailureCount = 0,
+    lastBootStatus = "UNKNOWN"
+}
+
+local selected = 1
+local currentMenu = "main"
+local bootInterrupted = false
+local bootFailure = false
 
 -- ============================================================
--- FORWARD DECLARATIONS
+-- BASIC UTILITIES
 -- ============================================================
 
-local bios
-local boot
-local bootManager
-local fileManager
-local systemInfo
-local hardwareInfo
-local settingsMenu
-local chooseBootFile
-local recoveryMenu
-local computerCraftShell
-local securityMenu
+local function now()
+    if os.date then
+        return os.date("%Y-%m-%d %H:%M:%S")
+    end
+    return "UNKNOWN"
+end
 
--- ============================================================
--- SCREEN FUNCTIONS
--- ============================================================
+local function safeWriteFile(path, data)
+    local ok = pcall(function()
+        local f = fs.open(path, "w")
+        if f then
+            f.write(data)
+            f.close()
+        end
+    end)
+    return ok
+end
 
-local function bootBackground()
-    term.setBackgroundColor(colors.black)
-    term.setTextColor(colors.white)
+local function safeReadFile(path)
+    local result = nil
+
+    pcall(function()
+        if fs.exists(path) then
+            local f = fs.open(path, "r")
+            if f then
+                result = f.readAll()
+                f.close()
+            end
+        end
+    end)
+
+    return result
+end
+
+local function appendFile(path, text)
+    pcall(function()
+        local f = fs.open(path, "a")
+        if f then
+            f.writeLine(text)
+            f.close()
+        end
+    end)
+end
+
+local function logEvent(text)
+    appendFile(LOG_FILE, "[" .. now() .. "] " .. text)
+end
+
+local function logError(text)
+    appendFile(ERROR_FILE, "[" .. now() .. "] " .. text)
+    logEvent("ERROR: " .. text)
+end
+
+local function logBoot(text)
+    appendFile(HISTORY_FILE, "[" .. now() .. "] " .. text)
+end
+
+local function clearScreen(bg)
+    term.setBackgroundColor(bg or C.black)
+    term.setTextColor(C.white)
     term.clear()
     term.setCursorPos(1, 1)
 end
 
-local function biosBackground()
-    term.setBackgroundColor(colors.lightBlue)
-    term.setTextColor(colors.white)
-    term.clear()
-    term.setCursorPos(1, 1)
+local function getSize()
+    return term.getSize()
 end
 
-local function pause(message)
-    print()
-    print(message or "Press any key to continue.")
+local function centerText(y, text, color)
+    local w = getSize()
+    local x = math.floor((w - #text) / 2) + 1
+
+    if x < 1 then
+        x = 1
+    end
+
+    term.setCursorPos(x, y)
+    term.setTextColor(color or C.white)
+    term.write(text)
+end
+
+local function line(y, color)
+    local w = getSize()
+
+    term.setCursorPos(1, y)
+    term.setTextColor(color or C.lightBlue)
+    term.write(string.rep("-", w))
+end
+
+local function header(title)
+    clearScreen(C.black)
+
+    term.setBackgroundColor(C.lightBlue)
+    term.setTextColor(C.white)
+
+    local w = getSize()
+    term.setCursorPos(1, 1)
+    term.clearLine()
+
+    local x = math.floor((w - #title) / 2) + 1
+
+    if x < 1 then
+        x = 1
+    end
+
+    term.setCursorPos(x, 1)
+    term.write(title)
+
+    term.setBackgroundColor(C.black)
+    term.setTextColor(C.white)
+end
+
+local function status(text, color)
+    local w, h = getSize()
+
+    term.setBackgroundColor(C.black)
+    term.setTextColor(color or C.white)
+
+    term.setCursorPos(2, h)
+    term.clearLine()
+    term.write(text:sub(1, math.max(1, w - 2)))
+end
+
+local function pause()
+    local w, h = getSize()
+
+    term.setTextColor(C.gray)
+    term.setCursorPos(2, h)
+
+    local message = "ENTER = Continue    BACKSPACE = Back"
+    term.write(message:sub(1, math.max(1, w - 2)))
 
     while true do
-        local event = os.pullEvent()
+        local event, key = os.pullEvent("key")
 
-        if event == "key" then
+        if key == keys.enter or key == keys.backspace then
             return
         end
     end
 end
 
-local function trim(text)
-    if not text then
-        return ""
+local function waitEnter()
+    while true do
+        local event, key = os.pullEvent("key")
+
+        if key == keys.enter then
+            return
+        end
     end
-
-    text = text:gsub("^%s+", "")
-    text = text:gsub("%s+$", "")
-
-    return text
 end
 
-local function boolText(value)
-    if value then
-        return "Enabled"
-    end
+local function yesNo(question)
+    header("Moon BIOS - Confirmation")
 
-    return "Disabled"
+    centerText(5, question, C.white)
+    centerText(7, "[ Y ]  Yes", C.green)
+    centerText(8, "[ N ]  No", C.red)
+
+    while true do
+        local event, key = os.pullEvent("key")
+
+        if key == keys.y then
+            return true
+        elseif key == keys.n then
+            return false
+        end
+    end
 end
 
-local function clamp(value, minimum, maximum)
-    if value < minimum then
-        return minimum
+-- ============================================================
+-- CONFIGURATION
+-- ============================================================
+
+local function serializeConfig()
+    local lines = {}
+
+    for key, value in pairs(config) do
+        local valueString
+
+        if type(value) == "boolean" then
+            valueString = value and "true" or "false"
+        else
+            valueString = tostring(value)
+        end
+
+        lines[#lines + 1] = key .. "=" .. valueString
     end
 
-    if value > maximum then
-        return maximum
+    table.sort(lines)
+
+    return table.concat(lines, "\n")
+end
+
+local function parseValue(value)
+    if value == "true" then
+        return true
+    end
+
+    if value == "false" then
+        return false
+    end
+
+    local number = tonumber(value)
+
+    if number ~= nil then
+        return number
     end
 
     return value
 end
 
--- ============================================================
--- FILE FUNCTIONS
--- ============================================================
-
-local function readFile(path)
-    if not fs.exists(path) then
-        return nil
-    end
-
-    if fs.isDir(path) then
-        return nil
-    end
-
-    local handle = fs.open(path, "r")
-
-    if not handle then
-        return nil
-    end
-
-    local data = handle.readAll()
-
-    handle.close()
-
-    return data
-end
-
-local function writeFile(path, data)
-    local handle = fs.open(path, "w")
-
-    if not handle then
-        return false
-    end
-
-    handle.write(data)
-    handle.close()
-
-    return true
-end
-
--- ============================================================
--- SETTINGS
--- ============================================================
-
-local function saveSettings()
-    local data = {
-        version = VERSION,
-        bootFile = bootFile,
-        bootDelay = bootDelay,
-        autoBoot = autoBoot,
-        postEnabled = postEnabled,
-        safeMode = safeMode,
-        secureBoot = secureBoot,
-        secureBootStrict = secureBootStrict
-    }
-
-    local ok, serialized = pcall(
-        textutils.serialise,
-        data
-    )
-
-    if not ok then
-        return false
-    end
-
-    return writeFile(
-        CONFIG_FILE,
-        serialized
-    )
-end
-
-local function loadSettings()
+local function loadConfig()
     if not fs.exists(CONFIG_FILE) then
-        saveSettings()
+        safeWriteFile(CONFIG_FILE, serializeConfig())
         return
     end
 
-    local data = readFile(CONFIG_FILE)
+    local data = safeReadFile(CONFIG_FILE)
 
-    if not data or data == "" then
+    if not data then
         return
     end
 
-    local ok, settingsData = pcall(
-        textutils.unserialise,
-        data
-    )
+    for lineText in string.gmatch(data, "[^\r\n]+") do
+        local key, value = lineText:match("^([^=]+)=(.*)$")
 
-    if not ok then
-        return
-    end
-
-    if type(settingsData) ~= "table" then
-        return
-    end
-
-    if type(settingsData.bootFile) == "string" then
-        if settingsData.bootFile ~= "" then
-            bootFile = settingsData.bootFile
+        if key and value and config[key] ~= nil then
+            config[key] = parseValue(value)
         end
     end
 
-    if type(settingsData.bootDelay) == "number" then
-        bootDelay = clamp(
-            math.floor(settingsData.bootDelay),
-            0,
-            30
-        )
+    if type(config.bootDelay) ~= "number" then
+        config.bootDelay = 5
     end
 
-    if type(settingsData.autoBoot) == "boolean" then
-        autoBoot = settingsData.autoBoot
+    if config.bootDelay < 0 then
+        config.bootDelay = 0
     end
 
-    if type(settingsData.postEnabled) == "boolean" then
-        postEnabled = settingsData.postEnabled
+    if config.bootDelay > 30 then
+        config.bootDelay = 30
     end
 
-    if type(settingsData.safeMode) == "boolean" then
-        safeMode = settingsData.safeMode
+    if type(config.bootFile) ~= "string" or config.bootFile == "" then
+        config.bootFile = DEFAULT_BOOT
     end
+end
 
-    if type(settingsData.secureBoot) == "boolean" then
-        secureBoot = settingsData.secureBoot
-    end
+local function saveConfig()
+    safeWriteFile(CONFIG_FILE, serializeConfig())
+    logEvent("BIOS configuration saved")
+end
 
-    if type(settingsData.secureBootStrict) == "boolean" then
-        secureBootStrict = settingsData.secureBootStrict
-    end
+local function resetConfig()
+    config.bootFile = DEFAULT_BOOT
+    config.bootDelay = 5
+    config.autoBoot = true
+    config.postEnabled = true
+    config.safeMode = false
+    config.secureBoot = true
+    config.secureBootStrict = false
+    config.passwordEnabled = false
+    config.password = ""
+    config.theme = "blue"
+    config.bootFailureCount = 0
+    config.lastBootStatus = "RESET"
+
+    saveConfig()
 end
 
 -- ============================================================
--- INTEGRITY CHECK
+-- PASSWORD
 -- ============================================================
 
-local function calculateDigest(text)
-    local h1 = 2166136261
-    local h2 = 16777619
-
-    for i = 1, #text do
-        local byte = string.byte(text, i)
-
-        h1 = bit32.bxor(h1, byte)
-        h1 = (h1 * 16777619) % 4294967296
-
-        h2 = bit32.bxor(
-            h2,
-            (byte + i) % 256
-        )
-
-        h2 = (h2 * 2246822519) % 4294967296
+local function passwordCheck()
+    if not config.passwordEnabled then
+        return true
     end
 
-    return string.format(
-        "%08x%08x",
-        h1,
-        h2
-    )
+    header("Moon BIOS - Password")
+
+    centerText(4, "BIOS password required", C.yellow)
+    centerText(6, "Enter password:", C.white)
+
+    term.setCursorPos(2, 8)
+    term.setTextColor(C.white)
+
+    local typed = read("*")
+
+    if typed == config.password then
+        return true
+    end
+
+    header("Moon BIOS - Access Denied")
+    centerText(6, "Incorrect password.", C.red)
+    sleep(1.5)
+
+    logError("BIOS password authentication failed")
+
+    return false
 end
 
-local function hasIntegrityRecord()
-    return fs.exists(INTEGRITY_FILE)
-end
+local function setPassword()
+    header("Moon BIOS - Password")
 
-local function createIntegrityRecord(path)
-    local source = readFile(path)
+    centerText(4, "Set BIOS Password", C.lightBlue)
+    centerText(6, "Leave blank to disable password.", C.gray)
 
-    if not source then
-        return false
+    term.setCursorPos(2, 8)
+    term.setTextColor(C.white)
+
+    local first = read("*")
+
+    if first == "" then
+        config.passwordEnabled = false
+        config.password = ""
+
+        saveConfig()
+
+        centerText(10, "Password disabled.", C.green)
+        sleep(1)
+        return
     end
 
-    local hash = calculateDigest(source)
+    centerText(10, "Confirm password:", C.white)
 
-    return writeFile(
-        INTEGRITY_FILE,
-        hash
-    )
-end
+    term.setCursorPos(2, 12)
+    local second = read("*")
 
-local function verifyLocalIntegrity(path)
-    if not fs.exists(INTEGRITY_FILE) then
-        return false,
-            "No integrity record exists."
+    if first ~= second then
+        centerText(15, "Passwords do not match.", C.red)
+        sleep(1.5)
+        return
     end
 
-    local expected = readFile(
-        INTEGRITY_FILE
-    )
+    config.password = first
+    config.passwordEnabled = true
 
-    if not expected then
-        return false,
-            "Unable to read integrity record."
-    end
+    saveConfig()
 
-    expected = trim(expected)
-
-    if expected == "" then
-        return false,
-            "Integrity record is empty."
-    end
-
-    local source = readFile(path)
-
-    if not source then
-        return false,
-            "Unable to read boot file."
-    end
-
-    local actual = calculateDigest(source)
-
-    if actual == expected then
-        return true,
-            "Integrity check passed."
-    end
-
-    return false,
-        "Integrity check FAILED."
-end
-
--- ============================================================
--- SECURE BOOT DETECTION
--- ============================================================
-
-local function hasCCSecureBoot()
-    return fs.exists(
-        "/rom/modules/main/codesign.lua"
-    )
-end
-
-local function verifySecureBoot(path)
-    if not secureBoot then
-        return true,
-            "Secure Boot disabled."
-    end
-
-    -- Real CCSecureBoot integration
-    if hasCCSecureBoot() then
-        local ok, module = pcall(
-            dofile,
-            "/rom/modules/main/codesign.lua"
-        )
-
-        if ok and type(module) == "table" then
-            if type(module.verify) == "function" then
-
-                local verified, result = pcall(
-                    module.verify,
-                    path
-                )
-
-                if verified and result then
-                    return true,
-                        "CCSecureBoot signature verified."
-                end
-
-                return false,
-                    "CCSecureBoot signature verification failed."
-            end
-        end
-
-        return false,
-            "CCSecureBoot verification module failed."
-    end
-
-    -- Moon BIOS local integrity fallback
-    local valid, message =
-        verifyLocalIntegrity(path)
-
-    if valid then
-        return true, message
-    end
-
-    if secureBootStrict then
-        return false,
-            "Strict Secure Boot requires a valid integrity record."
-    end
-
-    return false, message
+    centerText(15, "Password enabled.", C.green)
+    sleep(1.5)
 end
 
 -- ============================================================
@@ -380,764 +416,1203 @@ end
 -- ============================================================
 
 local function logo()
-    bootBackground()
+    clearScreen(C.black)
 
     local moon = {
         "             ######",
-        "           #######",
-        "        #########",
-        "      #########",
-        "     ########",
-        "    #######",
-        "    #####",
-        "     #######",
-        "      ########",
-        "       ########",
-        "        #########",
-        "           #######",
-        "             ######"
+        "           ########",
+        "        ###########",
+        "      #############",
+        "     ############",
+        "    ###########",
+        "    ########",
+        "    ######",
+        "     ####",
+        "       ##"
     }
 
-    for _, row in ipairs(moon) do
-        print(row)
+    local _, h = getSize()
+
+    local startY = math.floor(h / 2) - 7
+
+    if startY < 2 then
+        startY = 2
     end
 
-    print()
-    print("             Moon BIOS")
-    print("             Version " .. VERSION)
-    print()
-    print("Booting...")
-    print()
-    print("Press 1 during boot to enter BIOS")
-    print("Press 2 during boot for Boot Manager")
-    print("Press 3 during boot for Safe Mode")
+    for i, row in ipairs(moon) do
+        centerText(startY + i, row, C.lightBlue)
+    end
+
+    centerText(startY + 12, "MOON BIOS", C.white)
+    centerText(startY + 13, VERSION, C.gray)
+
+    sleep(1)
 end
 
 -- ============================================================
--- POST
+-- HARDWARE DETECTION
 -- ============================================================
 
-local function post()
-    if not postEnabled then
-        return true
-    end
-
-    bootBackground()
-
-    print("================================================")
-    print("                 MOON BIOS POST")
-    print("================================================")
-    print()
-
-    local tests = {}
-
-    -- CPU / core Lua test
-    tests[#tests + 1] = {
-        "CPU",
-        function()
-            return type(os.getComputerID) == "function"
-        end
-    }
-
-    -- ========================================================
-    -- FIXED MEMORY TEST
-    -- ========================================================
-
-    tests[#tests + 1] = {
-        "Memory",
-        function()
-            local ok = pcall(function()
-
-                local memoryTest = {}
-
-                for i = 1, 128 do
-                    memoryTest[i] =
-                        string.rep(
-                            "MOON",
-                            512
-                        )
-                end
-
-                -- Release the test memory
-                memoryTest = nil
-
-                -- Request garbage collection
-                if type(collectgarbage) == "function" then
-                    collectgarbage("collect")
-                end
-            end)
-
-            return ok
-        end
-    }
-
-    -- Filesystem
-    tests[#tests + 1] = {
-        "Filesystem",
-        function()
-            return fs ~= nil
-                and type(fs.exists) == "function"
-                and type(fs.open) == "function"
-                and type(fs.list) == "function"
-        end
-    }
-
-    -- Terminal
-    tests[#tests + 1] = {
-        "Terminal",
-        function()
-            return term ~= nil
-                and type(term.clear) == "function"
-                and type(term.setCursorPos) == "function"
-                and type(term.getSize) == "function"
-        end
-    }
-
-    -- Peripheral system
-    tests[#tests + 1] = {
-        "Peripherals",
-        function()
-            return peripheral ~= nil
-                and type(peripheral.getNames) == "function"
-        end
-    }
-
-    -- OS event system
-    tests[#tests + 1] = {
-        "Event System",
-        function()
-            return os ~= nil
-                and type(os.pullEvent) == "function"
-                and type(os.startTimer) == "function"
-        end
-    }
-
-    -- Shell
-    tests[#tests + 1] = {
-        "Shell",
-        function()
-            return shell ~= nil
-                and type(shell.run) == "function"
-        end
-    }
-
-    -- Secure Boot
-    if secureBoot then
-        tests[#tests + 1] = {
-            "Secure Boot",
-            function()
-                return hasCCSecureBoot()
-                    or hasIntegrityRecord()
-            end
-        }
-    end
-
-    local allPassed = true
-
-    for _, test in ipairs(tests) do
-        local name = test[1]
-
-        local ok, result =
-            pcall(test[2])
-
-        if ok and result then
-            print("[ OK ] " .. name)
-        else
-            print("[FAIL] " .. name)
-            allPassed = false
-        end
-
-        sleep(0.1)
-    end
-
-    print()
-
-    if allPassed then
-        print("POST COMPLETE")
-    else
-        print("POST COMPLETED WITH WARNINGS")
-    end
-
-    sleep(0.8)
-
-    return allPassed
-end
-
--- ============================================================
--- BOOT ERROR SCREEN
--- ============================================================
-
-local function bootError(title, message)
-    bootBackground()
-
-    print("Moon BIOS")
-    print()
-    print("================================================")
-    print("                  " .. title)
-    print("================================================")
-    print()
-    print(tostring(message))
-    print()
-    print("The boot process has been stopped.")
-    print()
-
-    pause(
-        "Press any key to open Recovery."
-    )
-end
-
--- ============================================================
--- RUN BOOT FILE
--- ============================================================
-
-local function runBootFile(path)
-    bootBackground()
-
-    if not fs.exists(path) then
-        bootError(
-            "BOOT ERROR",
-            "Boot file not found:\n" .. path
-        )
-
+local function graphicsAvailable()
+    if type(term.setGraphicsMode) ~= "function" then
         return false
+    end
+
+    local oldMode = nil
+
+    pcall(function()
+        if type(term.getGraphicsMode) == "function" then
+            oldMode = term.getGraphicsMode()
+        end
+    end)
+
+    local ok = pcall(function()
+        term.setGraphicsMode(0)
+    end)
+
+    if oldMode ~= nil then
+        pcall(function()
+            term.setGraphicsMode(oldMode)
+        end)
+    end
+
+    return ok
+end
+
+local function getGraphicsDimensions()
+    if not graphicsAvailable() then
+        return nil, nil
+    end
+
+    local w, h
+
+    pcall(function()
+        if type(term.getSize) == "function" then
+            w, h = term.getSize(2)
+        end
+    end)
+
+    return w, h
+end
+
+local function detectCCSecureBoot()
+    return fs.exists("/rom/modules/main/codesign.lua")
+end
+
+local function detectPeripherals()
+    local result = {}
+
+    if type(peripheral) ~= "table" then
+        return result
+    end
+
+    local names = peripheral.getNames()
+
+    for _, name in ipairs(names) do
+        local types = peripheral.getType(name)
+
+        if type(types) == "table" then
+            result[#result + 1] = name .. " [" .. table.concat(types, ", ") .. "]"
+        else
+            result[#result + 1] = name .. " [" .. tostring(types) .. "]"
+        end
+    end
+
+    return result
+end
+
+local function hardwareDetection()
+    header("Moon BIOS - Hardware Detection")
+
+    local w, h = getSize()
+    local y = 3
+
+    local function printItem(name, value)
+        if y >= h - 2 then
+            waitEnter()
+
+            header("Moon BIOS - Hardware Detection")
+            y = 3
+        end
+
+        term.setCursorPos(2, y)
+        term.setTextColor(C.lightBlue)
+        term.write(name .. ": ")
+
+        term.setTextColor(C.white)
+        term.write(tostring(value))
+
+        y = y + 1
+    end
+
+    printItem("Computer ID", os.getComputerID())
+
+    local label = os.getComputerLabel()
+
+    if label == nil then
+        label = "Not set"
+    end
+
+    printItem("Computer Label", label)
+    printItem("Computer Type", tostring(os.computerLabel and "Computer" or "Unknown"))
+    printItem("Terminal Width", w)
+    printItem("Terminal Height", h)
+    printItem("Graphics API", graphicsAvailable() and "Available" or "Unavailable")
+
+    local gw, gh = getGraphicsDimensions()
+
+    if gw and gh then
+        printItem("Graphics Width", gw)
+        printItem("Graphics Height", gh)
+    end
+
+    printItem("CCSecureBoot", detectCCSecureBoot() and "Detected" or "Not detected")
+
+    local peripherals = detectPeripherals()
+
+    printItem("Peripheral Count", #peripherals)
+
+    for _, peripheralName in ipairs(peripherals) do
+        printItem("Peripheral", peripheralName)
+    end
+
+    printItem("BIOS Version", VERSION)
+    printItem("Build", BUILD)
+
+    pause()
+end
+
+-- ============================================================
+-- POST TESTS
+-- ============================================================
+
+local function testCPU()
+    local ok = pcall(function()
+        local a = 12345
+        local b = 67890
+        local c = a + b
+
+        if c ~= 80235 then
+            error("CPU calculation failure")
+        end
+    end)
+
+    return ok
+end
+
+local function testMemory()
+    local ok = pcall(function()
+        local memoryTest = {}
+
+        for i = 1, 128 do
+            memoryTest[i] = string.rep("MOON", 512)
+        end
+
+        if #memoryTest ~= 128 then
+            error("Memory allocation failure")
+        end
+
+        memoryTest = nil
+
+        if type(collectgarbage) == "function" then
+            collectgarbage("collect")
+        end
+    end)
+
+    return ok
+end
+
+local function testFilesystem()
+    local testFile = ".moonbios_test"
+
+    local ok = pcall(function()
+        local f = fs.open(testFile, "w")
+
+        if not f then
+            error("Unable to create test file")
+        end
+
+        f.write("MOON BIOS")
+        f.close()
+
+        if not fs.exists(testFile) then
+            error("Test file missing")
+        end
+
+        fs.delete(testFile)
+    end)
+
+    pcall(function()
+        if fs.exists(testFile) then
+            fs.delete(testFile)
+        end
+    end)
+
+    return ok
+end
+
+local function testTerminal()
+    return pcall(function()
+        local w, h = term.getSize()
+
+        if not w or not h then
+            error("Terminal dimensions unavailable")
+        end
+
+        if w < 1 or h < 1 then
+            error("Invalid terminal dimensions")
+        end
+    end)
+end
+
+local function testPeripherals()
+    return pcall(function()
+        if peripheral and peripheral.getNames then
+            peripheral.getNames()
+        end
+    end)
+end
+
+local function testEvents()
+    return pcall(function()
+        if type(os.pullEventRaw) ~= "function" then
+            error("Event API unavailable")
+        end
+    end)
+end
+
+local function testShell()
+    return type(shell) == "table" and type(shell.run) == "function"
+end
+
+local function testGraphics()
+    return graphicsAvailable()
+end
+
+local function testSecureBootAPI()
+    return detectCCSecureBoot()
+end
+
+local function runPOST()
+    header("Moon BIOS - POST")
+
+    centerText(3, "Power-On Self Test", C.lightBlue)
+    centerText(4, "Testing system hardware...", C.gray)
+
+    local tests = {
+        {"CPU", testCPU},
+        {"Memory", testMemory},
+        {"Filesystem", testFilesystem},
+        {"Terminal", testTerminal},
+        {"Peripherals", testPeripherals},
+        {"Event System", testEvents},
+        {"Shell", testShell},
+        {"CC: Graphics", testGraphics},
+        {"Secure Boot API", testSecureBootAPI}
+    }
+
+    local results = {}
+    local failures = 0
+
+    for i, test in ipairs(tests) do
+        local name = test[1]
+        local fn = test[2]
+
+        local ok = false
+
+        local success, result = pcall(fn)
+
+        if success and result then
+            ok = true
+        end
+
+        results[#results + 1] = {
+            name = name,
+            ok = ok
+        }
+
+        if not ok then
+            failures = failures + 1
+        end
+
+        local y = 6 + i
+
+        term.setCursorPos(3, y)
+        term.setTextColor(C.white)
+        term.write(name)
+
+        term.setCursorPos(24, y)
+
+        if ok then
+            term.setTextColor(C.green)
+            term.write("[ PASS ]")
+        else
+            term.setTextColor(C.red)
+            term.write("[ FAIL ]")
+        end
+    end
+
+    term.setCursorPos(3, 17)
+    term.setTextColor(C.white)
+    term.write("POST Result: ")
+
+    if failures == 0 then
+        term.setTextColor(C.green)
+        term.write("PASS")
+        logEvent("POST completed successfully")
+    else
+        term.setTextColor(C.red)
+        term.write(tostring(failures) .. " FAILURE(S)")
+        logError("POST completed with failures: " .. tostring(failures))
+    end
+
+    sleep(1.5)
+
+    return failures == 0, results
+end
+
+-- ============================================================
+-- SECURE BOOT
+-- ============================================================
+
+local function calculateSimpleIntegrity(path)
+    if not fs.exists(path) or fs.isDir(path) then
+        return nil
+    end
+
+    local data = safeReadFile(path)
+
+    if not data then
+        return nil
+    end
+
+    local hash = 2166136261
+
+    for i = 1, #data do
+        hash = (hash ~ string.byte(data, i)) % 4294967296
+        hash = (hash * 16777619) % 4294967296
+    end
+
+    return string.format("%08x", hash)
+end
+
+local function secureBootVerify(path)
+    if not fs.exists(path) then
+        return false, "File does not exist"
     end
 
     if fs.isDir(path) then
-        bootError(
-            "BOOT ERROR",
-            path .. " is a directory."
-        )
-
-        return false
+        return false, "Path is a directory"
     end
 
-    -- Secure Boot
-    if secureBoot then
-        local verified, message =
-            verifySecureBoot(path)
+    if not config.secureBoot then
+        return true, "Secure Boot disabled"
+    end
 
-        if not verified then
-            bootError(
-                "SECURE BOOT FAILURE",
-                message
-                .. "\n\nFile: "
-                .. path
-            )
+    if detectCCSecureBoot() then
+        local ok, codesign = pcall(function()
+            return dofile("/rom/modules/main/codesign.lua")
+        end)
 
-            return false
+        if ok and codesign and type(codesign.verify) == "function" then
+            local verified, result = pcall(function()
+                return codesign.verify(path)
+            end)
+
+            if verified and result then
+                return true, "CCSecureBoot verification passed"
+            end
+
+            if config.secureBootStrict then
+                return false, "CCSecureBoot verification failed"
+            end
+
+            return true, "CCSecureBoot verification failed; strict mode disabled"
+        end
+
+        if config.secureBootStrict then
+            return false, "CCSecureBoot API unavailable"
         end
     end
 
-    -- Safe Mode information
-    if safeMode then
-        bootBackground()
+    local integrity = calculateSimpleIntegrity(path)
 
-        print("Moon BIOS")
-        print()
-        print("SAFE MODE")
-        print()
-        print("Booting:")
-        print(path)
-        print()
-        print("Safe Mode is active.")
-        sleep(0.7)
-    end
-
-    -- Run the program normally through CraftOS shell.
-    local ok, result = pcall(
-        function()
-            return shell.run(path)
+    if not integrity then
+        if config.secureBootStrict then
+            return false, "Unable to calculate integrity"
         end
-    )
 
-    if not ok then
-        bootError(
-            "BOOT RUNTIME ERROR",
-            tostring(result)
-        )
-
-        return false
+        return true, "Integrity unavailable; strict mode disabled"
     end
 
-    if result == false then
-        bootError(
-            "BOOT FAILURE",
-            "The boot program reported failure."
-        )
+    local secureData = safeReadFile(SECURITY_FILE)
 
-        return false
+    if secureData then
+        local stored = secureData:match("^" .. path:gsub("([^%w])", "%%%1") .. "=(%x+)")
+
+        if stored then
+            if stored == integrity then
+                return true, "Local integrity verification passed"
+            end
+
+            if config.secureBootStrict then
+                return false, "Integrity mismatch"
+            end
+
+            return true, "Integrity mismatch; strict mode disabled"
+        end
     end
 
-    return true
+    if config.secureBootStrict then
+        return false, "No trusted integrity record"
+    end
+
+    return true, "No trusted record; strict mode disabled"
 end
 
--- ============================================================
--- BOOT MANAGER
--- ============================================================
+local function secureBootScreen(path)
+    header("Moon BIOS - Secure Boot")
 
-bootManager = function()
-    while true do
-        biosBackground()
+    centerText(4, "Verifying boot file...", C.lightBlue)
+    centerText(6, path, C.white)
 
-        print("================================================")
-        print("                  BOOT MANAGER")
-        print("================================================")
-        print()
+    local ok, message = secureBootVerify(path)
 
-        print("Selected boot target:")
-        print("  " .. bootFile)
-        print()
-
-        if fs.exists(bootFile) then
-            print("Status: FOUND")
-        else
-            print("Status: NOT FOUND")
-        end
-
-        print()
-
-        print("1. Boot selected file")
-        print("2. Change boot file")
-        print("3. Boot Safe Mode")
-        print("4. Recovery")
-        print("5. Back")
-        print()
-
-        local _, key = os.pullEvent("key")
-
-        if key == keys.one then
-
-            local oldSafeMode = safeMode
-
-            safeMode = false
-            runBootFile(bootFile)
-
-            safeMode = oldSafeMode
-
-        elseif key == keys.two then
-
-            chooseBootFile()
-
-        elseif key == keys.three then
-
-            local oldSafeMode = safeMode
-
-            safeMode = true
-            runBootFile(bootFile)
-
-            safeMode = oldSafeMode
-
-        elseif key == keys.four then
-
-            recoveryMenu()
-
-        elseif key == keys.five then
-
-            return
-        end
+    if ok then
+        centerText(9, "VERIFIED", C.green)
+        centerText(11, message, C.gray)
+        logEvent("Secure Boot: " .. path .. " - " .. message)
+    else
+        centerText(9, "VERIFICATION FAILED", C.red)
+        centerText(11, message, C.red)
+        logError("Secure Boot rejected " .. path .. ": " .. message)
     end
+
+    sleep(1.5)
+
+    return ok
+end
+
+local function createIntegrityRecord()
+    header("Moon BIOS - Security")
+
+    local bootFile = config.bootFile
+
+    if not fs.exists(bootFile) then
+        centerText(6, "Boot file does not exist.", C.red)
+        pause()
+        return
+    end
+
+    local hash = calculateSimpleIntegrity(bootFile)
+
+    if not hash then
+        centerText(6, "Unable to calculate integrity.", C.red)
+        pause()
+        return
+    end
+
+    safeWriteFile(SECURITY_FILE, bootFile .. "=" .. hash .. "\n")
+
+    centerText(6, "Integrity record created.", C.green)
+    centerText(8, "File: " .. bootFile, C.white)
+    centerText(9, "Digest: " .. hash, C.gray)
+
+    logEvent("Created local integrity record for " .. bootFile)
+
+    pause()
 end
 
 -- ============================================================
 -- FILE MANAGER
 -- ============================================================
 
-fileManager = function()
+local function fileSize(path)
+    local size = 0
+
+    pcall(function()
+        if not fs.isDir(path) then
+            local data = safeReadFile(path)
+
+            if data then
+                size = #data
+            end
+        end
+    end)
+
+    return size
+end
+
+local function fileViewer(path)
+    if not fs.exists(path) then
+        header("Moon BIOS - File Viewer")
+        centerText(6, "File not found.", C.red)
+        pause()
+        return
+    end
+
+    if fs.isDir(path) then
+        header("Moon BIOS - File Viewer")
+        centerText(6, "Cannot view a directory.", C.red)
+        pause()
+        return
+    end
+
+    local data = safeReadFile(path)
+
+    if not data then
+        header("Moon BIOS - File Viewer")
+        centerText(6, "Unable to read file.", C.red)
+        pause()
+        return
+    end
+
+    local lines = {}
+
+    for textLine in string.gmatch(data, "[^\r\n]*") do
+        lines[#lines + 1] = textLine
+    end
+
+    local offset = 1
+
     while true do
-        biosBackground()
+        header("Moon BIOS - File Viewer")
 
-        print("================================================")
-        print("                 FILE MANAGER")
-        print("================================================")
-        print()
+        local w, h = getSize()
 
-        local files = fs.list("/")
+        term.setCursorPos(2, 2)
+        term.setTextColor(C.gray)
+        term.write(path)
 
-        if #files == 0 then
-            print("No files found.")
-        else
+        for i = 1, h - 5 do
+            local index = offset + i - 1
+            local textLine = lines[index]
 
-            for _, file in ipairs(files) do
-
-                if file ~= "startup"
-                    and file ~= "startup.lua" then
-
-                    if fs.isDir("/" .. file) then
-                        print("[DIR ] " .. file)
-                    else
-                        print("[FILE] " .. file)
-                    end
-                end
+            if textLine then
+                term.setCursorPos(2, i + 3)
+                term.setTextColor(C.white)
+                term.write(textLine:sub(1, w - 3))
             end
         end
 
-        print()
-        print("Press:")
-        print("  R = Run a file")
-        print("  D = Delete a file")
-        print("  B = Back")
-        print()
+        status("UP/DOWN Scroll    BACKSPACE Back")
 
-        local _, key = os.pullEvent("key")
+        local event, key = os.pullEvent("key")
 
-        if key == keys.r then
+        if key == keys.up then
+            if offset > 1 then
+                offset = offset - 1
+            end
+        elseif key == keys.down then
+            if offset < #lines then
+                offset = offset + 1
+            end
+        elseif key == keys.backspace then
+            return
+        end
+    end
+end
 
-            write("File to run: ")
+local function fileManager()
+    local path = "/"
+    local index = 1
 
-            local path = trim(read())
+    while true do
+        header("Moon BIOS - File Manager")
 
-            if path ~= "" then
-                runBootFile(path)
+        local entries = fs.list(path)
+        table.sort(entries)
+
+        if #entries == 0 then
+            centerText(6, "(empty)", C.gray)
+        end
+
+        local _, h = getSize()
+
+        if index < 1 then
+            index = 1
+        end
+
+        if index > #entries then
+            index = #entries
+        end
+
+        local visible = math.max(1, h - 7)
+
+        local start = 1
+
+        if index > visible then
+            start = index - visible + 1
+        end
+
+        for i = start, math.min(#entries, start + visible - 1) do
+            local y = 3 + (i - start)
+
+            local name = entries[i]
+            local full = fs.combine(path, name)
+
+            term.setCursorPos(2, y)
+
+            if i == index then
+                term.setBackgroundColor(C.lightBlue)
+                term.setTextColor(C.white)
+            else
+                term.setBackgroundColor(C.black)
+                term.setTextColor(C.white)
             end
 
-        elseif key == keys.d then
+            local suffix = ""
 
-            write("File to delete: ")
+            if fs.isDir(full) then
+                suffix = "/"
+            else
+                suffix = " (" .. tostring(fileSize(full)) .. " B)"
+            end
 
-            local path = trim(read())
+            term.clearLine()
+            term.write(name .. suffix)
 
-            if path ~= ""
-                and path ~= "startup"
-                and path ~= "startup.lua" then
+            term.setBackgroundColor(C.black)
+        end
 
-                if fs.exists(path) then
-                    fs.delete(path)
+        status("ENTER Open    D Delete    R Rename    N New Folder    BACKSPACE Back")
 
-                    print()
-                    print("Deleted.")
-                    sleep(0.5)
+        local event, key = os.pullEvent("key")
+
+        if key == keys.up then
+            if #entries > 0 then
+                index = index - 1
+
+                if index < 1 then
+                    index = #entries
                 end
             end
 
-        elseif key == keys.b
-            or key == keys.escape then
+        elseif key == keys.down then
+            if #entries > 0 then
+                index = index + 1
 
+                if index > #entries then
+                    index = 1
+                end
+            end
+
+        elseif key == keys.enter then
+            if #entries > 0 then
+                local name = entries[index]
+                local full = fs.combine(path, name)
+
+                if fs.isDir(full) then
+                    path = full
+                    index = 1
+                else
+                    fileViewer(full)
+                end
+            end
+
+        elseif key == keys.backspace then
+            if path == "/" then
+                return
+            end
+
+            path = fs.getDir(path)
+
+            if path == "" then
+                path = "/"
+            end
+
+            index = 1
+
+        elseif key == keys.d then
+            if #entries > 0 then
+                local full = fs.combine(path, entries[index])
+
+                if yesNo("Delete " .. entries[index] .. "?") then
+                    pcall(function()
+                        fs.delete(full)
+                    end)
+
+                    logEvent("Deleted " .. full)
+                end
+            end
+
+        elseif key == keys.r then
+            if #entries > 0 then
+                local oldName = entries[index]
+
+                header("Moon BIOS - Rename")
+
+                centerText(4, "Current: " .. oldName, C.white)
+                centerText(6, "New name:", C.lightBlue)
+
+                term.setCursorPos(2, 8)
+                local newName = read()
+
+                if newName ~= "" then
+                    local oldPath = fs.combine(path, oldName)
+                    local newPath = fs.combine(path, newName)
+
+                    if not fs.exists(newPath) then
+                        pcall(function()
+                            fs.move(oldPath, newPath)
+                        end)
+
+                        logEvent("Renamed " .. oldPath .. " to " .. newPath)
+                    end
+                end
+            end
+
+        elseif key == keys.n then
+            header("Moon BIOS - New Folder")
+
+            centerText(5, "Folder name:", C.lightBlue)
+
+            term.setCursorPos(2, 7)
+            local folder = read()
+
+            if folder ~= "" then
+                local newPath = fs.combine(path, folder)
+
+                if not fs.exists(newPath) then
+                    pcall(function()
+                        fs.makeDir(newPath)
+                    end)
+
+                    logEvent("Created directory " .. newPath)
+                end
+            end
+        end
+    end
+end
+
+-- ============================================================
+-- BOOT FILE SCANNER
+-- ============================================================
+
+local function scanBootFiles()
+    local result = {}
+
+    local entries = fs.list("/")
+
+    for _, name in ipairs(entries) do
+        local path = "/" .. name
+
+        if not fs.isDir(path) then
+            if name == "bootfile"
+                or name:match("^boot")
+                or name:match("^startup")
+                or name:match("^moon")
+                or name:match("%.lua$") then
+
+                result[#result + 1] = path
+            end
+        end
+    end
+
+    table.sort(result)
+
+    return result
+end
+
+local function bootManager()
+    local files = scanBootFiles()
+
+    if #files == 0 then
+        header("Moon BIOS - Boot Manager")
+        centerText(6, "No bootable files detected.", C.red)
+        pause()
+        return
+    end
+
+    local index = 1
+
+    for i, path in ipairs(files) do
+        if path == config.bootFile then
+            index = i
+        end
+    end
+
+    while true do
+        header("Moon BIOS - Boot Manager")
+
+        local _, h = getSize()
+        local visible = math.max(1, h - 7)
+
+        local start = 1
+
+        if index > visible then
+            start = index - visible + 1
+        end
+
+        for i = start, math.min(#files, start + visible - 1) do
+            local y = 3 + i - start
+
+            term.setCursorPos(2, y)
+
+            if i == index then
+                term.setBackgroundColor(C.lightBlue)
+                term.setTextColor(C.white)
+            else
+                term.setBackgroundColor(C.black)
+                term.setTextColor(C.white)
+            end
+
+            term.clearLine()
+
+            local marker = ""
+
+            if files[i] == config.bootFile then
+                marker = " [DEFAULT]"
+            end
+
+            term.write(files[i] .. marker)
+            term.setBackgroundColor(C.black)
+        end
+
+        status("ENTER Boot    S Set Default    D Delete    BACKSPACE Back")
+
+        local event, key = os.pullEvent("key")
+
+        if key == keys.up then
+            index = index - 1
+
+            if index < 1 then
+                index = #files
+            end
+
+        elseif key == keys.down then
+            index = index + 1
+
+            if index > #files then
+                index = 1
+            end
+
+        elseif key == keys.enter then
+            local selectedFile = files[index]
+
+            if secureBootScreen(selectedFile) then
+                local ok = pcall(function()
+                    shell.run(selectedFile)
+                end)
+
+                if not ok then
+                    logError("Boot Manager failed to execute " .. selectedFile)
+                end
+            end
+
+            return
+
+        elseif key == keys.s then
+            config.bootFile = files[index]
+            saveConfig()
+
+        elseif key == keys.d then
+            local selectedFile = files[index]
+
+            if selectedFile ~= "/startup" and selectedFile ~= "/bootfile" then
+                if yesNo("Delete " .. selectedFile .. "?") then
+                    pcall(function()
+                        fs.delete(selectedFile)
+                    end)
+
+                    logEvent("Boot Manager deleted " .. selectedFile)
+
+                    files = scanBootFiles()
+
+                    if #files == 0 then
+                        return
+                    end
+
+                    if index > #files then
+                        index = #files
+                    end
+                end
+            end
+
+        elseif key == keys.backspace then
             return
         end
     end
 end
 
 -- ============================================================
--- HARDWARE INFORMATION
--- ============================================================
-
-hardwareInfo = function()
-    biosBackground()
-
-    print("================================================")
-    print("                HARDWARE DETECTION")
-    print("================================================")
-    print()
-
-    print(
-        "Computer ID:     "
-        .. tostring(os.getComputerID())
-    )
-
-    print(
-        "Computer Label:  "
-        .. tostring(
-            os.getComputerLabel()
-            or "<not set>"
-        )
-    )
-
-    print(
-        "CraftOS:         "
-        .. tostring(os.version())
-    )
-
-    local width, height = term.getSize()
-
-    print(
-        "Terminal:        "
-        .. tostring(width)
-        .. "x"
-        .. tostring(height)
-    )
-
-    print()
-
-    print("Peripherals")
-    print("-----------")
-
-    local names =
-        peripheral.getNames()
-
-    if #names == 0 then
-        print("None detected.")
-    else
-
-        for _, name in ipairs(names) do
-
-            print()
-            print(name)
-
-            local types = {
-                peripheral.getType(name)
-            }
-
-            if #types > 0 then
-
-                for _, peripheralType in ipairs(types) do
-
-                    print(
-                        "  Type: "
-                        .. tostring(peripheralType)
-                    )
-                end
-
-            else
-
-                print("  Type: unknown")
-            end
-        end
-    end
-
-    print()
-    pause()
-
-end
-
--- ============================================================
 -- SYSTEM INFORMATION
 -- ============================================================
 
-systemInfo = function()
-    biosBackground()
+local function systemInfo()
+    header("Moon BIOS - System Information")
 
-    print("================================================")
-    print("              SYSTEM INFORMATION")
-    print("================================================")
-    print()
+    local _, h = getSize()
 
-    print("BIOS:            Moon BIOS")
-    print("Version:         " .. VERSION)
-    print("CraftOS:         " .. os.version())
+    local items = {
+        {"BIOS", VERSION},
+        {"Build", BUILD},
+        {"Boot File", config.bootFile},
+        {"Boot Delay", tostring(config.bootDelay) .. " seconds"},
+        {"Auto Boot", config.autoBoot and "Enabled" or "Disabled"},
+        {"POST", config.postEnabled and "Enabled" or "Disabled"},
+        {"Secure Boot", config.secureBoot and "Enabled" or "Disabled"},
+        {"Strict Secure Boot", config.secureBootStrict and "Enabled" or "Disabled"},
+        {"Password", config.passwordEnabled and "Enabled" or "Disabled"},
+        {"Theme", config.theme},
+        {"Boot Failures", tostring(config.bootFailureCount)},
+        {"Last Boot", config.lastBootStatus},
+        {"Computer ID", tostring(os.getComputerID())},
+        {"Computer Label", tostring(os.getComputerLabel() or "Not set")}
+    }
 
-    print(
-        "Computer ID:     "
-        .. tostring(os.getComputerID())
-    )
+    for i, item in ipairs(items) do
+        if 2 + i >= h - 1 then
+            waitEnter()
+            header("Moon BIOS - System Information")
+        end
 
-    print(
-        "Boot file:       "
-        .. bootFile
-    )
+        term.setCursorPos(2, 2 + i)
+        term.setTextColor(C.lightBlue)
+        term.write(item[1] .. ": ")
 
-    print(
-        "Boot delay:      "
-        .. tostring(bootDelay)
-        .. " seconds"
-    )
-
-    print(
-        "Auto Boot:       "
-        .. boolText(autoBoot)
-    )
-
-    print(
-        "POST:            "
-        .. boolText(postEnabled)
-    )
-
-    print(
-        "Safe Mode:       "
-        .. boolText(safeMode)
-    )
-
-    print(
-        "Secure Boot:     "
-        .. boolText(secureBoot)
-    )
-
-    print(
-        "Strict Secure:   "
-        .. boolText(secureBootStrict)
-    )
-
-    print()
-
-    if fs.exists(bootFile) then
-        print("Boot status:     FOUND")
-    else
-        print("Boot status:     NOT FOUND")
+        term.setTextColor(C.white)
+        term.write(item[2])
     end
-
-    if hasCCSecureBoot() then
-        print("Security:        CCSecureBoot detected")
-    elseif hasIntegrityRecord() then
-        print("Security:        Moon Integrity")
-    else
-        print("Security:        None")
-    end
-
-    print()
 
     pause()
 end
 
 -- ============================================================
--- BOOT FILE SELECTION
+-- SETTINGS
 -- ============================================================
 
-chooseBootFile = function()
-    biosBackground()
+local function chooseBootDelay()
+    header("Moon BIOS - Boot Delay")
 
-    print("================================================")
-    print("                 BOOT FILE SELECT")
-    print("================================================")
-    print()
+    centerText(4, "Choose boot delay", C.lightBlue)
 
-    print("Current:")
-    print("  " .. bootFile)
-    print()
+    local options = {
+        "0 seconds",
+        "1 second",
+        "3 seconds",
+        "5 seconds",
+        "10 seconds",
+        "15 seconds",
+        "30 seconds"
+    }
 
-    print("Examples:")
-    print("  bootfile")
-    print("  bootfile.lua")
-    print("  disk/bootfile")
-    print("  disk/bootfile.lua")
-    print()
+    local values = {
+        0,
+        1,
+        3,
+        5,
+        10,
+        15,
+        30
+    }
 
-    write("New boot file: ")
+    local index = 1
 
-    local newFile = trim(read())
-
-    if newFile ~= "" then
-        bootFile = newFile
-        saveSettings()
+    for i, value in ipairs(values) do
+        if value == config.bootDelay then
+            index = i
+        end
     end
 
-    print()
-    print("Boot file: " .. bootFile)
-
-    if fs.exists(bootFile) then
-        print("Status: FOUND")
-    else
-        print("Status: NOT FOUND")
-    end
-
-    print()
-
-    pause()
-end
-
--- ============================================================
--- BIOS SETTINGS
--- ============================================================
-
-settingsMenu = function()
     while true do
-        biosBackground()
+        for i, text in ipairs(options) do
+            term.setCursorPos(5, 7 + i)
 
-        print("================================================")
-        print("                 BIOS SETTINGS")
-        print("================================================")
-        print()
-
-        print(
-            "1. Boot Delay       "
-            .. tostring(bootDelay)
-            .. " sec"
-        )
-
-        print(
-            "2. Auto Boot        "
-            .. boolText(autoBoot)
-        )
-
-        print(
-            "3. POST             "
-            .. boolText(postEnabled)
-        )
-
-        print(
-            "4. Safe Mode        "
-            .. boolText(safeMode)
-        )
-
-        print(
-            "5. Secure Boot      "
-            .. boolText(secureBoot)
-        )
-
-        print(
-            "6. Strict Security  "
-            .. boolText(secureBootStrict)
-        )
-
-        print("7. Reset Settings")
-        print("8. Save Settings")
-        print("9. Back")
-        print()
-
-        local _, key =
-            os.pullEvent("key")
-
-        if key == keys.one then
-
-            biosBackground()
-
-            print("Boot delay: 0-30 seconds")
-            write("> ")
-
-            local value =
-                tonumber(read())
-
-            if value then
-                bootDelay = clamp(
-                    math.floor(value),
-                    0,
-                    30
-                )
+            if i == index then
+                term.setBackgroundColor(C.lightBlue)
+                term.setTextColor(C.white)
+            else
+                term.setBackgroundColor(C.black)
+                term.setTextColor(C.white)
             end
 
-        elseif key == keys.two then
+            term.write(text)
+            term.setBackgroundColor(C.black)
+        end
 
-            autoBoot = not autoBoot
-            saveSettings()
+        local event, key = os.pullEvent("key")
 
-        elseif key == keys.three then
+        if key == keys.up then
+            index = index - 1
 
-            postEnabled = not postEnabled
-            saveSettings()
+            if index < 1 then
+                index = #options
+            end
 
-        elseif key == keys.four then
+        elseif key == keys.down then
+            index = index + 1
 
-            safeMode = not safeMode
-            saveSettings()
+            if index > #options then
+                index = 1
+            end
 
-        elseif key == keys.five then
+        elseif key == keys.enter then
+            config.bootDelay = values[index]
+            saveConfig()
+            return
 
-            secureBoot = not secureBoot
-            saveSettings()
+        elseif key == keys.backspace then
+            return
+        end
+    end
+end
 
-        elseif key == keys.six then
+local function chooseTheme()
+    header("Moon BIOS - Theme")
 
-            secureBootStrict =
-                not secureBootStrict
+    local themes = {
+        {"blue", C.lightBlue},
+        {"cyan", C.cyan},
+        {"green", C.green},
+        {"purple", C.purple},
+        {"orange", C.orange}
+    }
 
-            saveSettings()
+    local index = 1
 
-        elseif key == keys.seven then
+    for i, item in ipairs(themes) do
+        if item[1] == config.theme then
+            index = i
+        end
+    end
 
-            bootFile = DEFAULT_BOOT_FILE
-            bootDelay = 5
-            autoBoot = true
-            postEnabled = true
-            safeMode = false
-            secureBoot = false
-            secureBootStrict = false
+    while true do
+        for i, item in ipairs(themes) do
+            term.setCursorPos(5, 5 + i)
 
-            saveSettings()
+            if i == index then
+                term.setBackgroundColor(item[2])
+                term.setTextColor(C.white)
+            else
+                term.setBackgroundColor(C.black)
+                term.setTextColor(item[2])
+            end
 
-        elseif key == keys.eight then
+            term.write(string.upper(item[1]))
+            term.setBackgroundColor(C.black)
+        end
 
-            saveSettings()
+        local event, key = os.pullEvent("key")
 
-        elseif key == keys.nine then
+        if key == keys.up then
+            index = index - 1
 
+            if index < 1 then
+                index = #themes
+            end
+
+        elseif key == keys.down then
+            index = index + 1
+
+            if index > #themes then
+                index = 1
+            end
+
+        elseif key == keys.enter then
+            config.theme = themes[index][1]
+            saveConfig()
+            return
+
+        elseif key == keys.backspace then
+            return
+        end
+    end
+end
+
+local function biosSettings()
+    local options = {
+        "Boot File",
+        "Boot Delay",
+        "Auto Boot",
+        "POST",
+        "Secure Boot",
+        "Strict Secure Boot",
+        "BIOS Password",
+        "Theme",
+        "Reset Configuration",
+        "Back"
+    }
+
+    local index = 1
+
+    while true do
+        header("Moon BIOS - BIOS Settings")
+
+        for i, option in ipairs(options) do
+            term.setCursorPos(3, 3 + i)
+
+            if i == index then
+                term.setBackgroundColor(C.lightBlue)
+                term.setTextColor(C.white)
+            else
+                term.setBackgroundColor(C.black)
+                term.setTextColor(C.white)
+            end
+
+            term.clearLine()
+            term.write(option)
+
+            term.setBackgroundColor(C.black)
+        end
+
+        status("ENTER Select    UP/DOWN Navigate")
+
+        local event, key = os.pullEvent("key")
+
+        if key == keys.up then
+            index = index - 1
+
+            if index < 1 then
+                index = #options
+            end
+
+        elseif key == keys.down then
+            index = index + 1
+
+            if index > #options then
+                index = 1
+            end
+
+        elseif key == keys.enter then
+            if index == 1 then
+                bootManager()
+
+            elseif index == 2 then
+                chooseBootDelay()
+
+            elseif index == 3 then
+                config.autoBoot = not config.autoBoot
+                saveConfig()
+
+            elseif index == 4 then
+                config.postEnabled = not config.postEnabled
+                saveConfig()
+
+            elseif index == 5 then
+                config.secureBoot = not config.secureBoot
+                saveConfig()
+
+            elseif index == 6 then
+                config.secureBootStrict = not config.secureBootStrict
+                saveConfig()
+
+            elseif index == 7 then
+                setPassword()
+
+            elseif index == 8 then
+                chooseTheme()
+
+            elseif index == 9 then
+                if yesNo("Reset all BIOS settings?") then
+                    resetConfig()
+                end
+
+            elseif index == 10 then
+                return
+            end
+
+        elseif key == keys.backspace then
             return
         end
     end
@@ -1147,273 +1622,876 @@ end
 -- SECURITY MENU
 -- ============================================================
 
-securityMenu = function()
+local function securityMenu()
+    local options = {
+        "Secure Boot Status",
+        "Verify Boot File",
+        "Create Integrity Record",
+        "Toggle Secure Boot",
+        "Toggle Strict Mode",
+        "BIOS Password",
+        "Back"
+    }
+
+    local index = 1
+
     while true do
-        biosBackground()
+        header("Moon BIOS - Security")
 
-        print("================================================")
-        print("                MOON SECURITY")
-        print("================================================")
-        print()
+        for i, option in ipairs(options) do
+            term.setCursorPos(3, 3 + i)
 
-        print(
-            "Secure Boot: "
-            .. boolText(secureBoot)
-        )
+            if i == index then
+                term.setBackgroundColor(C.lightBlue)
+                term.setTextColor(C.white)
+            else
+                term.setBackgroundColor(C.black)
+                term.setTextColor(C.white)
+            end
 
-        print(
-            "Strict Mode: "
-            .. boolText(secureBootStrict)
-        )
+            term.clearLine()
+            term.write(option)
 
-        print()
-
-        if hasCCSecureBoot() then
-            print("Provider: CCSecureBoot")
-            print("Status: Cryptographic verification available")
-        elseif hasIntegrityRecord() then
-            print("Provider: Moon Integrity")
-            print("Status: Local integrity record available")
-        else
-            print("Provider: None")
-            print("Status: No security record")
+            term.setBackgroundColor(C.black)
         end
 
-        print()
+        status("ENTER Select    UP/DOWN Navigate")
 
-        print("1. Enable/Disable Secure Boot")
-        print("2. Enable/Disable Strict Mode")
-        print("3. Verify Boot File")
-        print("4. Create Integrity Record")
-        print("5. Delete Integrity Record")
-        print("6. Back")
-        print()
+        local event, key = os.pullEvent("key")
 
-        local _, key =
-            os.pullEvent("key")
+        if key == keys.up then
+            index = index - 1
 
-        if key == keys.one then
-
-            secureBoot = not secureBoot
-            saveSettings()
-
-        elseif key == keys.two then
-
-            secureBootStrict =
-                not secureBootStrict
-
-            saveSettings()
-
-        elseif key == keys.three then
-
-            biosBackground()
-
-            print("Verifying:")
-            print(bootFile)
-            print()
-
-            if not fs.exists(bootFile) then
-
-                print("Boot file does not exist.")
-
-            else
-
-                local ok, message =
-                    verifySecureBoot(bootFile)
-
-                if ok then
-                    print("[ OK ] " .. message)
-                else
-                    print("[FAIL] " .. message)
-                end
+            if index < 1 then
+                index = #options
             end
 
-            pause()
+        elseif key == keys.down then
+            index = index + 1
 
-        elseif key == keys.four then
-
-            biosBackground()
-
-            if not fs.exists(bootFile) then
-
-                print(
-                    "Boot file does not exist."
-                )
-
-            else
-
-                local ok =
-                    createIntegrityRecord(
-                        bootFile
-                    )
-
-                if ok then
-
-                    print(
-                        "Integrity record created."
-                    )
-
-                    print()
-                    print(
-                        "Registered file:"
-                    )
-
-                    print(bootFile)
-
-                else
-
-                    print(
-                        "Could not create integrity record."
-                    )
-                end
+            if index > #options then
+                index = 1
             end
 
-            pause()
+        elseif key == keys.enter then
+            if index == 1 then
+                header("Moon BIOS - Secure Boot Status")
 
-        elseif key == keys.five then
+                centerText(4, "Secure Boot: " ..
+                    (config.secureBoot and "ENABLED" or "DISABLED"),
+                    config.secureBoot and C.green or C.red)
 
-            if fs.exists(
-                INTEGRITY_FILE
-            ) then
+                centerText(6, "Strict Mode: " ..
+                    (config.secureBootStrict and "ENABLED" or "DISABLED"),
+                    config.secureBootStrict and C.green or C.yellow)
 
-                fs.delete(
-                    INTEGRITY_FILE
-                )
-
-                biosBackground()
-
-                print(
-                    "Integrity record deleted."
-                )
+                centerText(8, "CCSecureBoot: " ..
+                    (detectCCSecureBoot() and "DETECTED" or "NOT DETECTED"),
+                    detectCCSecureBoot() and C.green or C.gray)
 
                 pause()
+
+            elseif index == 2 then
+                secureBootScreen(config.bootFile)
+                pause()
+
+            elseif index == 3 then
+                createIntegrityRecord()
+
+            elseif index == 4 then
+                config.secureBoot = not config.secureBoot
+                saveConfig()
+
+            elseif index == 5 then
+                config.secureBootStrict = not config.secureBootStrict
+                saveConfig()
+
+            elseif index == 6 then
+                setPassword()
+
+            elseif index == 7 then
+                return
             end
 
-        elseif key == keys.six then
-
+        elseif key == keys.backspace then
             return
         end
     end
 end
 
 -- ============================================================
--- COMPUTERCRAFT SHELL
+-- LOG VIEWER
 -- ============================================================
 
-computerCraftShell = function()
+local function viewLog(path, title)
+    local data = safeReadFile(path)
 
-    if secureBoot
-        and secureBootStrict then
+    header("Moon BIOS - " .. title)
 
-        biosBackground()
-
-        print("================================================")
-        print("             SHELL ACCESS BLOCKED")
-        print("================================================")
-        print()
-
-        print(
-            "Strict Secure Boot is enabled."
-        )
-
-        print()
-
-        print(
-            "Disable Strict Secure Boot before"
-        )
-
-        print(
-            "opening the ComputerCraft shell."
-        )
-
+    if not data or data == "" then
+        centerText(6, "No log entries.", C.gray)
         pause()
-
         return
     end
 
-    biosBackground()
+    local lines = {}
 
-    print(
-        "Starting ComputerCraft Shell..."
-    )
+    for textLine in string.gmatch(data, "[^\r\n]+") do
+        lines[#lines + 1] = textLine
+    end
 
-    sleep(0.5)
+    local offset = math.max(1, #lines - 10)
 
-    shell.run("shell")
+    while true do
+        header("Moon BIOS - " .. title)
+
+        local _, h = getSize()
+
+        for i = 1, h - 5 do
+            local index = offset + i - 1
+
+            if lines[index] then
+                term.setCursorPos(2, i + 2)
+                term.setTextColor(C.white)
+                term.write(lines[index])
+            end
+        end
+
+        status("UP/DOWN Scroll    BACKSPACE Back")
+
+        local event, key = os.pullEvent("key")
+
+        if key == keys.up then
+            if offset > 1 then
+                offset = offset - 1
+            end
+
+        elseif key == keys.down then
+            if offset < #lines then
+                offset = offset + 1
+            end
+
+        elseif key == keys.backspace then
+            return
+        end
+    end
+end
+
+local function logsMenu()
+    local options = {
+        "Boot Log",
+        "Boot History",
+        "Error Log",
+        "Clear Logs",
+        "Back"
+    }
+
+    local index = 1
+
+    while true do
+        header("Moon BIOS - Logs")
+
+        for i, option in ipairs(options) do
+            term.setCursorPos(3, 3 + i)
+
+            if i == index then
+                term.setBackgroundColor(C.lightBlue)
+                term.setTextColor(C.white)
+            else
+                term.setBackgroundColor(C.black)
+                term.setTextColor(C.white)
+            end
+
+            term.clearLine()
+            term.write(option)
+
+            term.setBackgroundColor(C.black)
+        end
+
+        local event, key = os.pullEvent("key")
+
+        if key == keys.up then
+            index = index - 1
+
+            if index < 1 then
+                index = #options
+            end
+
+        elseif key == keys.down then
+            index = index + 1
+
+            if index > #options then
+                index = 1
+            end
+
+        elseif key == keys.enter then
+            if index == 1 then
+                viewLog(LOG_FILE, "Boot Log")
+
+            elseif index == 2 then
+                viewLog(HISTORY_FILE, "Boot History")
+
+            elseif index == 3 then
+                viewLog(ERROR_FILE, "Error Log")
+
+            elseif index == 4 then
+                if yesNo("Clear all BIOS logs?") then
+                    safeWriteFile(LOG_FILE, "")
+                    safeWriteFile(HISTORY_FILE, "")
+                    safeWriteFile(ERROR_FILE, "")
+                end
+
+            elseif index == 5 then
+                return
+            end
+
+        elseif key == keys.backspace then
+            return
+        end
+    end
 end
 
 -- ============================================================
 -- RECOVERY
 -- ============================================================
 
-recoveryMenu = function()
+local function repairBootFile()
+    header("Moon BIOS - Boot Recovery")
+
+    centerText(4, "Boot File Recovery", C.lightBlue)
+
+    if fs.exists(config.bootFile) then
+        centerText(7, "Boot file exists.", C.green)
+        centerText(8, config.bootFile, C.white)
+        centerText(10, "A missing boot file cannot be repaired automatically.", C.gray)
+        pause()
+        return
+    end
+
+    centerText(7, "Boot file is missing.", C.red)
+
+    local candidates = scanBootFiles()
+
+    if #candidates == 0 then
+        centerText(9, "No replacement boot files found.", C.red)
+        pause()
+        return
+    end
+
+    centerText(9, "Select replacement boot file.", C.yellow)
+
+    local index = 1
 
     while true do
+        for i, path in ipairs(candidates) do
+            term.setCursorPos(3, 11 + i)
 
-        biosBackground()
+            if i == index then
+                term.setBackgroundColor(C.lightBlue)
+                term.setTextColor(C.white)
+            else
+                term.setBackgroundColor(C.black)
+                term.setTextColor(C.white)
+            end
 
-        print("================================================")
-        print("                BOOT RECOVERY")
-        print("================================================")
-        print()
+            term.write(path)
+            term.setBackgroundColor(C.black)
+        end
 
-        print(
-            "Boot file: "
-            .. bootFile
+        local event, key = os.pullEvent("key")
+
+        if key == keys.up then
+            index = index - 1
+
+            if index < 1 then
+                index = #candidates
+            end
+
+        elseif key == keys.down then
+            index = index + 1
+
+            if index > #candidates then
+                index = 1
+            end
+
+        elseif key == keys.enter then
+            config.bootFile = candidates[index]
+            saveConfig()
+
+            header("Moon BIOS - Boot Recovery")
+            centerText(7, "Boot file changed.", C.green)
+            centerText(9, config.bootFile, C.white)
+            pause()
+
+            return
+
+        elseif key == keys.backspace then
+            return
+        end
+    end
+end
+
+local function recoveryMenu()
+    local options = {
+        "Boot Manager",
+        "Safe Mode",
+        "Repair Boot Configuration",
+        "Repair Boot File",
+        "File Manager",
+        "CraftOS Shell",
+        "View Logs",
+        "Factory Reset BIOS",
+        "Restart",
+        "Shutdown",
+        "Back"
+    }
+
+    local index = 1
+
+    while true do
+        header("Moon BIOS - Recovery")
+
+        for i, option in ipairs(options) do
+            term.setCursorPos(3, 3 + i)
+
+            if i == index then
+                term.setBackgroundColor(C.lightBlue)
+                term.setTextColor(C.white)
+            else
+                term.setBackgroundColor(C.black)
+                term.setTextColor(C.white)
+            end
+
+            term.clearLine()
+            term.write(option)
+
+            term.setBackgroundColor(C.black)
+        end
+
+        status("ENTER Select    UP/DOWN Navigate")
+
+        local event, key = os.pullEvent("key")
+
+        if key == keys.up then
+            index = index - 1
+
+            if index < 1 then
+                index = #options
+            end
+
+        elseif key == keys.down then
+            index = index + 1
+
+            if index > #options then
+                index = 1
+            end
+
+        elseif key == keys.enter then
+            if index == 1 then
+                bootManager()
+
+            elseif index == 2 then
+                safeMode()
+
+            elseif index == 3 then
+                resetConfig()
+
+            elseif index == 4 then
+                repairBootFile()
+
+            elseif index == 5 then
+                fileManager()
+
+            elseif index == 6 then
+                clearScreen(C.black)
+
+                pcall(function()
+                    shell.run("shell")
+                end)
+
+            elseif index == 7 then
+                logsMenu()
+
+            elseif index == 8 then
+                if yesNo("FACTORY RESET BIOS?") then
+                    resetConfig()
+
+                    header("Moon BIOS - Recovery")
+                    centerText(7, "BIOS reset complete.", C.green)
+                    pause()
+                end
+
+            elseif index == 9 then
+                os.reboot()
+
+            elseif index == 10 then
+                os.shutdown()
+
+            elseif index == 11 then
+                return
+            end
+
+        elseif key == keys.backspace then
+            return
+        end
+    end
+end
+
+-- ============================================================
+-- SAFE MODE
+-- ============================================================
+
+function safeMode()
+    config.safeMode = true
+
+    header("Moon BIOS - Safe Mode")
+
+    centerText(4, "SAFE MODE", C.yellow)
+    centerText(6, "Moon BIOS has started Safe Mode.", C.white)
+    centerText(8, "Only recovery tools are available.", C.gray)
+
+    sleep(1)
+
+    local options = {
+        "CraftOS Shell",
+        "File Manager",
+        "Boot Manager",
+        "System Information",
+        "Hardware Detection",
+        "Logs",
+        "Restart"
+    }
+
+    local index = 1
+
+    while true do
+        header("Moon BIOS - Safe Mode")
+
+        for i, option in ipairs(options) do
+            term.setCursorPos(3, 3 + i)
+
+            if i == index then
+                term.setBackgroundColor(C.orange)
+                term.setTextColor(C.white)
+            else
+                term.setBackgroundColor(C.black)
+                term.setTextColor(C.white)
+            end
+
+            term.clearLine()
+            term.write(option)
+
+            term.setBackgroundColor(C.black)
+        end
+
+        local event, key = os.pullEvent("key")
+
+        if key == keys.up then
+            index = index - 1
+
+            if index < 1 then
+                index = #options
+            end
+
+        elseif key == keys.down then
+            index = index + 1
+
+            if index > #options then
+                index = 1
+            end
+
+        elseif key == keys.enter then
+            if index == 1 then
+                clearScreen(C.black)
+                pcall(function()
+                    shell.run("shell")
+                end)
+
+            elseif index == 2 then
+                fileManager()
+
+            elseif index == 3 then
+                bootManager()
+
+            elseif index == 4 then
+                systemInfo()
+
+            elseif index == 5 then
+                hardwareDetection()
+
+            elseif index == 6 then
+                logsMenu()
+
+            elseif index == 7 then
+                os.reboot()
+            end
+
+        elseif key == keys.backspace then
+            return
+        end
+    end
+end
+
+-- ============================================================
+-- MAIN BIOS
+-- ============================================================
+
+local function mainMenu()
+    local options = {
+        "Boot Manager",
+        "System Information",
+        "Hardware Detection",
+        "BIOS Settings",
+        "Security",
+        "File Manager",
+        "Diagnostics",
+        "Logs",
+        "Recovery",
+        "CraftOS Shell",
+        "Restart",
+        "Shutdown"
+    }
+
+    local index = 1
+
+    while true do
+        header("Moon BIOS " .. VERSION)
+
+        local w, h = getSize()
+
+        term.setCursorPos(2, 2)
+        term.setTextColor(C.gray)
+        term.write("MOON BIOS / SYSTEM FIRMWARE")
+
+        for i, option in ipairs(options) do
+            local y = 4 + i
+
+            if y >= h - 2 then
+                break
+            end
+
+            term.setCursorPos(3, y)
+
+            if i == index then
+                term.setBackgroundColor(C.lightBlue)
+                term.setTextColor(C.white)
+            else
+                term.setBackgroundColor(C.black)
+                term.setTextColor(C.white)
+            end
+
+            term.clearLine()
+            term.write(option)
+
+            term.setBackgroundColor(C.black)
+        end
+
+        term.setCursorPos(2, h - 1)
+        term.setTextColor(C.gray)
+
+        local secureText = config.secureBoot and "ON" or "OFF"
+        local postText = config.postEnabled and "ON" or "OFF"
+
+        term.write(
+            "Boot: " ..
+            config.bootFile ..
+            " | Secure: " ..
+            secureText ..
+            " | POST: " ..
+            postText
         )
 
-        print()
+        status("UP/DOWN Navigate    ENTER Select")
 
-        print("1. Retry Boot")
-        print("2. Boot Safe Mode")
-        print("3. Boot Manager")
-        print("4. File Manager")
-        print("5. ComputerCraft Shell")
-        print("6. Change Boot File")
-        print("7. Security")
-        print("8. BIOS")
-        print()
+        local event, key = os.pullEvent("key")
 
-        local _, key =
-            os.pullEvent("key")
+        if key == keys.up then
+            index = index - 1
 
-        if key == keys.one then
+            if index < 1 then
+                index = #options
+            end
 
-            runBootFile(bootFile)
+        elseif key == keys.down then
+            index = index + 1
 
-        elseif key == keys.two then
+            if index > #options then
+                index = 1
+            end
 
-            local oldSafeMode =
-                safeMode
+        elseif key == keys.enter then
+            if index == 1 then
+                bootManager()
 
-            safeMode = true
+            elseif index == 2 then
+                systemInfo()
 
-            runBootFile(bootFile)
+            elseif index == 3 then
+                hardwareDetection()
 
-            safeMode = oldSafeMode
+            elseif index == 4 then
+                biosSettings()
 
-        elseif key == keys.three then
+            elseif index == 5 then
+                securityMenu()
 
+            elseif index == 6 then
+                fileManager()
+
+            elseif index == 7 then
+                local passed = runPOST()
+
+                if not passed then
+                    pause()
+                end
+
+            elseif index == 8 then
+                logsMenu()
+
+            elseif index == 9 then
+                recoveryMenu()
+
+            elseif index == 10 then
+                clearScreen(C.black)
+
+                pcall(function()
+                    shell.run("shell")
+                end)
+
+            elseif index == 11 then
+                os.reboot()
+
+            elseif index == 12 then
+                os.shutdown()
+            end
+
+        elseif key == keys.backspace then
+            return
+        end
+    end
+end
+
+-- ============================================================
+-- DIAGNOSTICS
+-- ============================================================
+
+local function graphicsTest()
+    header("Moon BIOS - Graphics Test")
+
+    if not graphicsAvailable() then
+        centerText(6, "CC: Graphics is not available.", C.red)
+        pause()
+        return
+    end
+
+    local oldMode = 0
+
+    pcall(function()
+        if type(term.getGraphicsMode) == "function" then
+            oldMode = term.getGraphicsMode()
+        end
+    end)
+
+    local ok = pcall(function()
+        term.setGraphicsMode(2)
+    end)
+
+    if not ok then
+        centerText(6, "Unable to enter graphics mode.", C.red)
+        pause()
+        return
+    end
+
+    local gw, gh = term.getSize(2)
+
+    if type(term.drawPixels) == "function" then
+        term.drawPixels(0, 0, 0, gw, gh)
+
+        term.drawPixels(
+            math.floor(gw * 0.25),
+            math.floor(gh * 0.25),
+            1,
+            math.floor(gw * 0.5),
+            math.floor(gh * 0.5)
+        )
+    end
+
+    sleep(1)
+
+    pcall(function()
+        term.setGraphicsMode(oldMode or 0)
+    end)
+
+    header("Moon BIOS - Graphics Test")
+
+    centerText(6, "Graphics test completed.", C.green)
+    centerText(8, tostring(gw) .. " x " .. tostring(gh) .. " pixels", C.gray)
+
+    pause()
+end
+
+local function diagnosticsMenu()
+    local options = {
+        "Full POST",
+        "CPU Test",
+        "Memory Test",
+        "Filesystem Test",
+        "Terminal Test",
+        "Peripheral Test",
+        "Graphics Test",
+        "Secure Boot Test",
+        "Back"
+    }
+
+    local functions = {
+        function()
+            runPOST()
+        end,
+
+        function()
+            local ok = testCPU()
+
+            header("Moon BIOS - CPU Test")
+            centerText(6, ok and "PASS" or "FAIL", ok and C.green or C.red)
+            pause()
+        end,
+
+        function()
+            local ok = testMemory()
+
+            header("Moon BIOS - Memory Test")
+            centerText(6, ok and "PASS" or "FAIL", ok and C.green or C.red)
+            pause()
+        end,
+
+        function()
+            local ok = testFilesystem()
+
+            header("Moon BIOS - Filesystem Test")
+            centerText(6, ok and "PASS" or "FAIL", ok and C.green or C.red)
+            pause()
+        end,
+
+        function()
+            local ok = testTerminal()
+
+            header("Moon BIOS - Terminal Test")
+            centerText(6, ok and "PASS" or "FAIL", ok and C.green or C.red)
+            pause()
+        end,
+
+        function()
+            local ok = testPeripherals()
+
+            header("Moon BIOS - Peripheral Test")
+            centerText(6, ok and "PASS" or "FAIL", ok and C.green or C.red)
+            pause()
+        end,
+
+        graphicsTest,
+
+        function()
+            local ok = secureBootVerify(config.bootFile)
+
+            header("Moon BIOS - Secure Boot Test")
+            centerText(6, ok and "PASS" or "FAIL", ok and C.green or C.red)
+            pause()
+        end
+    }
+
+    local index = 1
+
+    while true do
+        header("Moon BIOS - Diagnostics")
+
+        for i, option in ipairs(options) do
+            term.setCursorPos(3, 3 + i)
+
+            if i == index then
+                term.setBackgroundColor(C.lightBlue)
+                term.setTextColor(C.white)
+            else
+                term.setBackgroundColor(C.black)
+                term.setTextColor(C.white)
+            end
+
+            term.clearLine()
+            term.write(option)
+
+            term.setBackgroundColor(C.black)
+        end
+
+        local event, key = os.pullEvent("key")
+
+        if key == keys.up then
+            index = index - 1
+
+            if index < 1 then
+                index = #options
+            end
+
+        elseif key == keys.down then
+            index = index + 1
+
+            if index > #options then
+                index = 1
+            end
+
+        elseif key == keys.enter then
+            if index == #options then
+                return
+            end
+
+            functions[index]()
+
+        elseif key == keys.backspace then
+            return
+        end
+    end
+end
+
+-- ============================================================
+-- BOOT FAILURE HANDLER
+-- ============================================================
+
+local function bootFailureScreen(message)
+    config.bootFailureCount = (tonumber(config.bootFailureCount) or 0) + 1
+    config.lastBootStatus = "FAILED"
+    saveConfig()
+
+    logBoot(
+        "BOOT FAILED: " ..
+        tostring(config.bootFile) ..
+        " | " ..
+        tostring(message)
+    )
+
+    logError(
+        "Boot failure #" ..
+        tostring(config.bootFailureCount) ..
+        ": " ..
+        tostring(message)
+    )
+
+    header("Moon BIOS - Boot Failure")
+
+    centerText(4, "BOOT FAILED", C.red)
+    centerText(6, config.bootFile, C.white)
+
+    centerText(8, tostring(message), C.red)
+
+    centerText(11, "ENTER = Recovery", C.yellow)
+    centerText(12, "BACKSPACE = Boot Manager", C.gray)
+
+    while true do
+        local event, key = os.pullEvent("key")
+
+        if key == keys.enter then
+            recoveryMenu()
+            return
+
+        elseif key == keys.backspace then
             bootManager()
-
-        elseif key == keys.four then
-
-            fileManager()
-
-        elseif key == keys.five then
-
-            computerCraftShell()
-
-        elseif key == keys.six then
-
-            chooseBootFile()
-
-        elseif key == keys.seven then
-
-            securityMenu()
-
-        elseif key == keys.eight then
-
             return
         end
     end
@@ -1423,246 +2501,176 @@ end
 -- BOOT PROCESS
 -- ============================================================
 
-boot = function()
+local function attemptBoot()
+    local path = config.bootFile
 
-    loadSettings()
-
-    -- Show Moon BIOS logo
-    logo()
-
-    -- POST
-    if postEnabled then
-        sleep(0.25)
-        post()
+    if not fs.exists(path) then
+        bootFailureScreen("Boot file not found")
+        return false
     end
 
-    -- ========================================================
-    -- MISSING BOOT FILE
-    -- ========================================================
-
-    if not fs.exists(bootFile) then
-
-        sleep(0.5)
-
-        bios()
-
-        return
+    if fs.isDir(path) then
+        bootFailureScreen("Boot path is a directory")
+        return false
     end
 
-    -- ========================================================
-    -- AUTO BOOT DISABLED
-    -- ========================================================
+    if config.secureBoot then
+        local secureOK = secureBootScreen(path)
 
-    if not autoBoot then
-
-        bios()
-
-        return
+        if not secureOK then
+            if config.secureBootStrict then
+                bootFailureScreen("Secure Boot rejected the boot file")
+                return false
+            end
+        end
     end
 
-    -- ========================================================
-    -- HIDDEN BOOT TIMER
-    -- ========================================================
+    clearScreen(C.black)
 
-    local timer =
-        os.startTimer(bootDelay)
+    logBoot("Attempting boot: " .. path)
+
+    local ok, result = pcall(function()
+        return shell.run(path)
+    end)
+
+    if not ok then
+        bootFailureScreen(result or "Unknown boot error")
+        return false
+    end
+
+    if result == false then
+        bootFailureScreen("Boot program returned failure")
+        return false
+    end
+
+    config.bootFailureCount = 0
+    config.lastBootStatus = "SUCCESS"
+
+    saveConfig()
+
+    logBoot("BOOT SUCCESS: " .. path)
+
+    return true
+end
+
+-- ============================================================
+-- BOOT INTERRUPT SCREEN
+-- ============================================================
+
+local function bootCountdown()
+    if not config.autoBoot then
+        return "bios"
+    end
+
+    if config.bootDelay <= 0 then
+        return "boot"
+    end
+
+    local deadline = os.clock() + config.bootDelay
 
     while true do
+        local remaining = math.ceil(deadline - os.clock())
 
-        local event, parameter =
-            os.pullEvent()
-
-        if event == "key" then
-
-            -- BIOS
-            if parameter == keys.one then
-
-                os.cancelTimer(timer)
-
-                bios()
-
-                return
-            end
-
-            -- Boot Manager
-            if parameter == keys.two then
-
-                os.cancelTimer(timer)
-
-                bootManager()
-
-                return
-            end
-
-            -- Safe Mode
-            if parameter == keys.three then
-
-                os.cancelTimer(timer)
-
-                local oldSafeMode =
-                    safeMode
-
-                safeMode = true
-
-                runBootFile(bootFile)
-
-                safeMode = oldSafeMode
-
-                bios()
-
-                return
-            end
+        if remaining <= 0 then
+            return "boot"
         end
 
-        if event == "timer"
-            and parameter == timer then
+        clearScreen(C.black)
 
-            break
+        centerText(4, "MOON BIOS " .. VERSION, C.lightBlue)
+        centerText(7, "Booting:", C.gray)
+        centerText(8, config.bootFile, C.white)
+
+        centerText(
+            11,
+            "Automatic boot in " .. tostring(remaining),
+            C.white
+        )
+
+        centerText(14, "[1] BIOS", C.lightBlue)
+        centerText(15, "[2] Boot Manager", C.lightBlue)
+        centerText(16, "[3] Safe Mode", C.yellow)
+
+        local timer = os.startTimer(0.1)
+
+        while true do
+            local event, a = os.pullEvent()
+
+            if event == "timer" and a == timer then
+                break
+
+            elseif event == "key" then
+                if a == keys.one then
+                    return "bios"
+
+                elseif a == keys.two then
+                    return "bootmanager"
+
+                elseif a == keys.three then
+                    return "safe"
+                end
+            end
         end
-    end
-
-    -- ========================================================
-    -- AUTOMATIC BOOT
-    -- ========================================================
-
-    local success =
-        runBootFile(bootFile)
-
-    if success then
-
-        bios()
-
-    else
-
-        recoveryMenu()
     end
 end
 
 -- ============================================================
--- MAIN BIOS
+-- INITIALIZATION
 -- ============================================================
 
-bios = function()
+loadConfig()
 
-    while true do
+logEvent("Moon BIOS " .. VERSION .. " initialized")
 
-        biosBackground()
+logo()
 
-        print("================================================")
-        print("                 MOON BIOS")
-        print("================================================")
-        print()
+-- Password protects manual BIOS access.
+-- It does not interfere with the normal boot countdown.
+local mode = bootCountdown()
 
-        print(
-            "Moon BIOS Setup Utility"
-        )
+if mode == "bios" then
+    if passwordCheck() then
+        mainMenu()
+    end
 
-        print(
-            "Version "
-            .. VERSION
-        )
+elseif mode == "bootmanager" then
+    if passwordCheck() then
+        bootManager()
+    end
 
-        print()
+elseif mode == "safe" then
+    if passwordCheck() then
+        safeMode()
+    end
 
-        print("SYSTEM")
-        print("------")
+elseif mode == "boot" then
+    if config.postEnabled then
+        local passed = runPOST()
 
-        print(
-            "Computer ID: "
-            .. tostring(
-                os.getComputerID()
-            )
-        )
-
-        print(
-            "Boot file:   "
-            .. bootFile
-        )
-
-        if fs.exists(bootFile) then
-            print(
-                "Boot status: FOUND"
-            )
+        if not passed and config.secureBootStrict then
+            bootFailureScreen("POST failed while strict security is enabled")
         else
-            print(
-                "Boot status: NOT FOUND"
-            )
+            attemptBoot()
         end
-
-        print()
-
-        print("BOOT CONFIGURATION")
-        print("------------------")
-
-        print("1. Boot Manager")
-        print("2. File Manager")
-        print("3. System Information")
-        print("4. Hardware Detection")
-        print("5. BIOS Settings")
-        print("6. Security / Secure Boot")
-        print("7. Recovery")
-        print("8. ComputerCraft Shell")
-        print("9. Restart")
-        print("0. Shutdown")
-
-        print()
-
-        print(
-            "================================================"
-        )
-
-        print(
-            "Select an option:"
-        )
-
-        local _, key =
-            os.pullEvent("key")
-
-        if key == keys.one then
-
-            bootManager()
-
-        elseif key == keys.two then
-
-            fileManager()
-
-        elseif key == keys.three then
-
-            systemInfo()
-
-        elseif key == keys.four then
-
-            hardwareInfo()
-
-        elseif key == keys.five then
-
-            settingsMenu()
-
-        elseif key == keys.six then
-
-            securityMenu()
-
-        elseif key == keys.seven then
-
-            recoveryMenu()
-
-        elseif key == keys.eight then
-
-            computerCraftShell()
-
-        elseif key == keys.nine then
-
-            os.reboot()
-
-        elseif key == keys.zero then
-
-            os.shutdown()
-        end
+    else
+        attemptBoot()
     end
 end
 
 -- ============================================================
--- START MOON BIOS
+-- FALLBACK
 -- ============================================================
 
-boot()
+while true do
+    header("Moon BIOS - Recovery")
+
+    centerText(5, "Moon BIOS has returned from the boot program.", C.yellow)
+    centerText(7, "The operating system has stopped.", C.gray)
+    centerText(9, "ENTER = BIOS", C.lightBlue)
+
+    waitEnter()
+
+    if passwordCheck() then
+        mainMenu()
+    end
+end
