@@ -1,16 +1,16 @@
 {
   "name": "moon-bios",
-  "version": "1.3.0",
-  "description": "Moon BIOS for CC:Tweaked",
+  "version": "v1.3 pocket",
+  "description": "Moon BIOS with version-name hardware targeting",
   "author": "CubeHub Studio",
   "dependencies": [],
   "files": [
     {
-      "source": "https://cubehub-studio.github.io/CC-Moon-BIOS/startup",
+      "source": "https://cubehub-studio.github.io/CC-Moon-BIOS/versions/v1.3-pocket/startup",
       "path": "startup"
     },
     {
-      "source": "https://cubehub-studio.github.io/CC-Moon-BIOS/updatemoonbios",
+      "source": "https://cubehub-studio.github.io/CC-Moon-BIOS/versions/v1.3-pocket/updatemoonbios",
       "path": "updatemoonbios"
     }
   ]
