@@ -1,17 +1,9 @@
 {
-  "package": "moon-bios",
-  "versions": {
-    "v1.2 mini": {
-      "target": "computer",
-      "path": "versions/v1.2-mini"
-    },
-    "v1.2 advance": {
-      "target": "computer",
-      "path": "versions/v1.2-advance"
-    },
-    "v1.3 pocket": {
-      "target": "pocket",
-      "path": "versions/v1.3-pocket"
-    }
+  "package":"moon-bios",
+  "versions":{
+    "v1.2 mini":{"target":"computer","path":"versions/v1.2-mini"},
+    "v1.2 advance":{"target":"computer","path":"versions/v1.2-advance"},
+    "v1.3":{"target":"computer","path":"versions/v1.3"},
+    "v1.3 pocket":{"target":"pocket","path":"versions/v1.3-pocket"}
   }
 }
