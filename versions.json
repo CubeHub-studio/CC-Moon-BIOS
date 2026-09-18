@@ -1,0 +1,11 @@
+{
+  "package": "moon-bios",
+  "versions": {
+    "1.3.0": {
+      "targets": {
+        "computer": true,
+        "pocket": true
+      }
+    }
+  }
+}
