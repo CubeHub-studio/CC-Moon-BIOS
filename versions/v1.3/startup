@@ -2,6 +2,8 @@
 -- Moon BIOS v1.3
 -- CC:Tweaked
 --
+-- Complete fixed release
+--
 -- Controls:
 --   UP/DOWN     Navigate
 --   ENTER       Select
@@ -39,12 +41,47 @@ local cfg = {
 }
 
 -- ============================================================
--- Utility
+-- Safe Calls
 -- ============================================================
 
 local function safeCall(fn, ...)
-    local ok, a, b, c = pcall(fn, ...)
-    return ok, a, b, c
+    return pcall(fn, ...)
+end
+
+-- ============================================================
+-- Terminal Helpers
+-- ============================================================
+
+local function terminalWidth()
+    local w = term.getSize()
+    return w
+end
+
+local function terminalHeight()
+    local _, h = term.getSize()
+    return h
+end
+
+local function fitText(text, width)
+    text = tostring(text or "")
+    width = math.max(1, tonumber(width) or 1)
+
+    if #text <= width then
+        return text
+    end
+
+    if width <= 3 then
+        return text:sub(1, width)
+    end
+
+    return text:sub(1, width - 3) .. "..."
+end
+
+local function fitLine(text)
+    return fitText(
+        text,
+        math.max(1, terminalWidth())
+    )
 end
 
 local function clear(bg)
@@ -52,12 +89,35 @@ local function clear(bg)
     term.setTextColor(C.white)
     term.clear()
     term.setCursorPos(1, 1)
+    term.setCursorBlink(false)
+end
+
+local function writeAt(x, y, text, colour)
+    local w = terminalWidth()
+
+    x = math.max(1, math.floor(x or 1))
+    y = math.max(1, math.floor(y or 1))
+
+    if x > w then
+        return
+    end
+
+    local available = w - x + 1
+
+    term.setCursorPos(x, y)
+    term.setTextColor(colour or C.white)
+    term.write(
+        fitText(text, available)
+    )
 end
 
 local function center(y, text, colour)
-    local w = term.getSize()
+    local w = terminalWidth()
 
-    text = tostring(text or "")
+    text = fitText(
+        text,
+        math.max(1, w)
+    )
 
     local x = math.max(
         1,
@@ -77,9 +137,13 @@ local function center(y, text, colour)
 end
 
 local function line(y, colour)
-    local w = term.getSize()
+    local w = terminalWidth()
 
-    term.setCursorPos(1, y)
+    term.setCursorPos(
+        1,
+        math.max(1, y)
+    )
+
     term.setTextColor(
         colour or C.gray
     )
@@ -89,20 +153,47 @@ local function line(y, colour)
     )
 end
 
+local function footer(text)
+    local h = terminalHeight()
+
+    center(
+        h,
+        text,
+        C.gray
+    )
+end
+
+local function pause(message)
+    footer(
+        message or "ENTER = Continue"
+    )
+
+    while true do
+        local event, key =
+            os.pullEvent("key")
+
+        if key == keys.enter then
+            return
+        end
+    end
+end
+
+-- ============================================================
+-- Logging
+-- ============================================================
+
 local function log(message)
     if not cfg.bootLog then
         return
     end
 
     safeCall(function()
-
         local f = fs.open(
             LOG_FILE,
             "a"
         )
 
         if f then
-
             f.writeLine(
                 os.date(
                     "%Y-%m-%d %H:%M:%S"
@@ -120,10 +211,23 @@ end
 -- Configuration
 -- ============================================================
 
+local function defaultConfig()
+    return {
+        bootFile = BOOT_DEFAULT,
+        bootDelay = 5,
+        autoBoot = true,
+        post = true,
+        safe = false,
+        secure = false,
+        strict = false,
+        animations = true,
+        showLogo = true,
+        bootLog = true
+    }
+end
+
 local function saveConfig()
-
     safeCall(function()
-
         local f = fs.open(
             CFG_FILE,
             "w"
@@ -140,60 +244,49 @@ local function saveConfig()
 end
 
 local function resetConfig()
-
-    cfg = {
-        bootFile = BOOT_DEFAULT,
-        bootDelay = 5,
-        autoBoot = true,
-        post = true,
-        safe = false,
-        secure = false,
-        strict = false,
-        animations = true,
-        showLogo = true,
-        bootLog = true
-    }
-
+    cfg = defaultConfig()
     saveConfig()
 end
 
 local function loadConfig()
-
     if not fs.exists(CFG_FILE) then
+        cfg = defaultConfig()
         saveConfig()
         return
     end
 
-    local ok, data = safeCall(function()
+    local ok, data = safeCall(
+        function()
+            local f = fs.open(
+                CFG_FILE,
+                "r"
+            )
 
-        local f = fs.open(
-            CFG_FILE,
-            "r"
-        )
+            if not f then
+                return nil
+            end
 
-        if not f then
-            return nil
+            local raw = f.readAll()
+            f.close()
+
+            return textutils.unserialize(
+                raw
+            )
         end
-
-        local text = f.readAll()
-
-        f.close()
-
-        return textutils.unserialize(
-            text
-        )
-    end)
+    )
 
     if ok and type(data) == "table" then
+        local defaults = defaultConfig()
 
-        for k, v in pairs(data) do
-
-            if cfg[k] ~= nil then
-                cfg[k] = v
+        for key, value in pairs(defaults) do
+            if data[key] == nil then
+                data[key] = value
             end
         end
 
+        cfg = data
     else
+        cfg = defaultConfig()
 
         log(
             "Invalid configuration. Defaults restored."
@@ -204,9 +297,7 @@ local function loadConfig()
 
     if type(cfg.bootFile) ~= "string"
         or cfg.bootFile == "" then
-
-        cfg.bootFile =
-            BOOT_DEFAULT
+        cfg.bootFile = BOOT_DEFAULT
     end
 
     if type(cfg.bootDelay) ~= "number" then
@@ -217,62 +308,20 @@ local function loadConfig()
         0,
         math.min(
             30,
-            math.floor(
-                cfg.bootDelay
-            )
+            math.floor(cfg.bootDelay)
         )
     )
 
-    cfg.autoBoot =
-        cfg.autoBoot ~= false
-
-    cfg.post =
-        cfg.post ~= false
-
-    cfg.safe =
-        cfg.safe == true
-
-    cfg.secure =
-        cfg.secure == true
-
-    cfg.strict =
-        cfg.strict == true
-
-    cfg.animations =
-        cfg.animations ~= false
-
-    cfg.showLogo =
-        cfg.showLogo ~= false
-
-    cfg.bootLog =
-        cfg.bootLog ~= false
+    cfg.autoBoot = cfg.autoBoot ~= false
+    cfg.post = cfg.post ~= false
+    cfg.safe = cfg.safe == true
+    cfg.secure = cfg.secure == true
+    cfg.strict = cfg.strict == true
+    cfg.animations = cfg.animations ~= false
+    cfg.showLogo = cfg.showLogo ~= false
+    cfg.bootLog = cfg.bootLog ~= false
 
     saveConfig()
-end
-
--- ============================================================
--- Pause
--- ============================================================
-
-local function pause(message)
-
-    local _, h = term.getSize()
-
-    center(
-        h,
-        message or "ENTER = Continue",
-        C.gray
-    )
-
-    while true do
-
-        local event, key =
-            os.pullEvent("key")
-
-        if key == keys.enter then
-            return
-        end
-    end
 end
 
 -- ============================================================
@@ -280,7 +329,6 @@ end
 -- ============================================================
 
 local function moonLogo(y, colour)
-
     local moon = {
         "             ######",
         "           #######",
@@ -298,7 +346,6 @@ local function moonLogo(y, colour)
     }
 
     for i, row in ipairs(moon) do
-
         center(
             y + i,
             row,
@@ -312,16 +359,13 @@ end
 -- ============================================================
 
 local function logo()
-
     clear()
 
-    local _, h = term.getSize()
+    local h = terminalHeight()
 
     local y = math.max(
         1,
-        math.floor(
-            (h - 13) / 2
-        ) - 2
+        math.floor((h - 13) / 2) - 2
     )
 
     moonLogo(
@@ -349,15 +393,13 @@ local function logo()
 end
 
 -- ============================================================
--- POST TESTS
+-- POST Tests
 -- ============================================================
 
 local function memoryTest()
-
     local blocks = {}
 
     for i = 1, 16 do
-
         blocks[i] =
             string.rep(
                 "MOON",
@@ -375,9 +417,7 @@ local function memoryTest()
 end
 
 local function filesystemTest()
-
-    local path =
-        ".moonbios_test"
+    local path = ".moonbios_test"
 
     if fs.exists(path) then
         fs.delete(path)
@@ -404,7 +444,6 @@ local function filesystemTest()
     )
 
     if not f then
-
         if fs.exists(path) then
             fs.delete(path)
         end
@@ -412,37 +451,29 @@ local function filesystemTest()
         return false
     end
 
-    local data =
-        f.readAll()
+    local data = f.readAll()
 
     f.close()
 
-    fs.delete(path)
+    if fs.exists(path) then
+        fs.delete(path)
+    end
 
-    return data ==
-        "MOON BIOS 1.3"
+    return data == "MOON BIOS 1.3"
 end
 
 local function terminalTest()
-
-    local x, y =
-        term.getCursorPos()
-
-    local w, h =
-        term.getSize()
+    local x, y = term.getCursorPos()
+    local w, h = term.getSize()
 
     if not x
         or not y
         or not w
         or not h then
-
         return false
     end
 
-    term.setCursorPos(
-        1,
-        1
-    )
+    term.setCursorPos(1, 1)
 
     term.setCursorPos(
         math.min(x, w),
@@ -453,38 +484,26 @@ local function terminalTest()
 end
 
 local function peripheralTest()
-
-    local names =
-        peripheral.getNames()
-
-    return type(names) ==
-        "table"
+    local names = peripheral.getNames()
+    return type(names) == "table"
 end
 
 local function eventTest()
-
-    return type(os.pullEvent) ==
-        "function"
-        and type(os.queueEvent) ==
-        "function"
+    return type(os.pullEvent) == "function"
+        and type(os.queueEvent) == "function"
 end
 
 local function shellTest()
-
-    return type(shell) ==
-        "table"
-        and type(shell.run) ==
-        "function"
+    return type(shell) == "table"
+        and type(shell.run) == "function"
 end
 
 local function storageTest()
-
     local total = 0
 
     for _, name in ipairs(
         fs.list("/")
     ) do
-
         local path =
             fs.combine(
                 "/",
@@ -492,9 +511,7 @@ local function storageTest()
             )
 
         if not fs.isDir(path) then
-
-            local size =
-                fs.getSize(path)
+            local size = fs.getSize(path)
 
             if type(size) ~= "number" then
                 return false, total
@@ -509,7 +526,6 @@ local function storageTest()
 end
 
 local function graphicsTest()
-
     return type(
         term.setGraphicsMode
     ) == "function"
@@ -520,7 +536,6 @@ end
 -- ============================================================
 
 local function post()
-
     if not cfg.post then
         return true
     end
@@ -545,12 +560,10 @@ local function post()
     )
 
     local tests = {
-
         {
             "Computer",
             function()
-                return os.getComputerID()
-                    ~= nil
+                return os.getComputerID() ~= nil
             end
         },
 
@@ -601,60 +614,66 @@ local function post()
     local all = true
 
     for _, test in ipairs(tests) do
-
-        term.setCursorPos(
+        writeAt(
             3,
-            y
-        )
-
-        term.setTextColor(
+            y,
+            test[1],
             C.white
         )
 
-        term.write(
-            test[1]
-        )
-
         local ok, result =
-            safeCall(
-                test[2]
-            )
+            safeCall(test[2])
+
+        local status
 
         if ok and result then
+            status = "[ OK ]"
 
-            term.setTextColor(
+            writeAt(
+                math.max(
+                    1,
+                    terminalWidth() - #status - 2
+                ),
+                y,
+                status,
                 C.green
             )
-
-            term.write(
-                "  [ OK ]"
-            )
-
         else
+            status = "[FAIL]"
+            all = false
 
-            term.setTextColor(
+            writeAt(
+                math.max(
+                    1,
+                    terminalWidth() - #status - 2
+                ),
+                y,
+                status,
                 C.red
             )
-
-            term.write(
-                "  [FAIL]"
-            )
-
-            all = false
         end
 
         y = y + 1
+
+        if y >= terminalHeight() - 2 then
+            break
+        end
     end
 
     line(
-        y,
+        math.min(
+            y,
+            terminalHeight() - 1
+        ),
         C.gray
     )
 
     if all then
-
         center(
-            y + 2,
+            math.min(
+                y + 2,
+                terminalHeight() - 1
+            ),
             "POST PASSED",
             C.green
         )
@@ -662,11 +681,12 @@ local function post()
         log(
             "POST passed."
         )
-
     else
-
         center(
-            y + 2,
+            math.min(
+                y + 2,
+                terminalHeight() - 1
+            ),
             "POST WARNING",
             C.yellow
         )
@@ -682,11 +702,10 @@ local function post()
 end
 
 -- ============================================================
--- File Hash
+-- Hashing
 -- ============================================================
 
 local function hashFile(path)
-
     if not fs.exists(path) then
         return nil
     end
@@ -704,16 +723,13 @@ local function hashFile(path)
         return nil
     end
 
-    local data =
-        f.readAll()
+    local data = f.readAll()
 
     f.close()
 
-    local hash =
-        2166136261
+    local hash = 2166136261
 
     for i = 1, #data do
-
         hash = bit32.bxor(
             hash,
             string.byte(
@@ -734,11 +750,10 @@ local function hashFile(path)
 end
 
 -- ============================================================
--- Secure Boot Verification
+-- Secure Boot
 -- ============================================================
 
 local function verifyBootFile(path)
-
     if not cfg.secure then
         return true
     end
@@ -750,15 +765,8 @@ local function verifyBootFile(path)
         return false
     end
 
-    if not fs.exists(
-        SEC_FILE
-    ) then
-
-        if cfg.strict then
-            return false
-        end
-
-        return true
+    if not fs.exists(SEC_FILE) then
+        return not cfg.strict
     end
 
     local f = fs.open(
@@ -773,42 +781,38 @@ local function verifyBootFile(path)
     local found = false
     local valid = false
 
-    for entry in f.readAll():
-        gmatch("[^\r\n]+") do
+    local contents =
+        f.readAll()
 
+    f.close()
+
+    for entry in contents:gmatch(
+        "[^\r\n]+"
+    ) do
         local p, expected =
             entry:match(
                 "^(.-)|(.+)$"
             )
 
         if p == path then
-
             found = true
             valid =
                 expected == current
         end
     end
 
-    f.close()
-
     if not found then
-
-        if cfg.strict then
-            return false
-        end
-
-        return true
+        return not cfg.strict
     end
 
     return valid
 end
 
 -- ============================================================
--- Create Secure Boot Record
+-- Integrity Record
 -- ============================================================
 
 local function createIntegrityRecord()
-
     clear()
 
     center(
@@ -847,7 +851,6 @@ local function createIntegrityRecord()
         )
 
     if not hash then
-
         center(
             6,
             "FAILED TO READ BOOT FILE",
@@ -865,7 +868,6 @@ local function createIntegrityRecord()
     )
 
     if not f then
-
         center(
             6,
             "FAILED TO CREATE RECORD",
@@ -912,20 +914,17 @@ local function createIntegrityRecord()
 end
 
 -- ============================================================
--- Last Boot Record
+-- Last Boot
 -- ============================================================
 
 local function saveLastBoot(status)
-
     safeCall(function()
-
         local f = fs.open(
             LAST_FILE,
             "w"
         )
 
         if f then
-
             f.writeLine(
                 "file="
                 .. tostring(
@@ -935,16 +934,12 @@ local function saveLastBoot(status)
 
             f.writeLine(
                 "status="
-                .. tostring(
-                    status
-                )
+                .. tostring(status)
             )
 
             f.writeLine(
                 "time="
-                .. tostring(
-                    os.date()
-                )
+                .. tostring(os.date())
             )
 
             f.close()
@@ -953,7 +948,6 @@ local function saveLastBoot(status)
 end
 
 local function showLastBoot()
-
     clear()
 
     center(
@@ -988,7 +982,6 @@ local function showLastBoot()
     )
 
     if not f then
-
         center(
             7,
             "Unable to read boot record.",
@@ -1002,19 +995,20 @@ local function showLastBoot()
 
     local y = 6
 
-    for text in f.readAll():
-        gmatch("[^\r\n]+") do
+    for text in f.readAll():gmatch(
+        "[^\r\n]+"
+    ) do
 
-        term.setCursorPos(
+        if y >= terminalHeight() - 2 then
+            break
+        end
+
+        writeAt(
             3,
-            y
-        )
-
-        term.setTextColor(
+            y,
+            text,
             C.white
         )
-
-        term.write(text)
 
         y = y + 1
     end
@@ -1029,7 +1023,6 @@ end
 -- ============================================================
 
 local function bootError(reason)
-
     clear()
 
     center(
@@ -1050,13 +1043,8 @@ local function bootError(reason)
         C.white
     )
 
-    local _, h =
-        term.getSize()
-
-    center(
-        h - 1,
-        "ENTER = Recovery",
-        C.gray
+    footer(
+        "ENTER = Recovery"
     )
 
     log(
@@ -1068,11 +1056,10 @@ local function bootError(reason)
 end
 
 -- ============================================================
--- Run Boot File
+-- Boot File
 -- ============================================================
 
 local function runBootFile(path)
-
     if not path
         or path == "" then
 
@@ -1084,7 +1071,6 @@ local function runBootFile(path)
     end
 
     if not fs.exists(path) then
-
         bootError(
             "Boot file not found: "
             .. path
@@ -1094,17 +1080,14 @@ local function runBootFile(path)
     end
 
     if fs.isDir(path) then
-
         bootError(
-            "Boot path is a directory: "
-            .. path
+            "Boot path is a directory."
         )
 
         return false
     end
 
     if not verifyBootFile(path) then
-
         bootError(
             "Secure Boot blocked the file."
         )
@@ -1127,7 +1110,6 @@ local function runBootFile(path)
         )
 
     if not ok then
-
         bootError(
             "Boot program crashed."
         )
@@ -1136,7 +1118,6 @@ local function runBootFile(path)
     end
 
     if result == false then
-
         bootError(
             "Boot program returned failure."
         )
@@ -1152,7 +1133,6 @@ end
 -- ============================================================
 
 local function showSystemInfo()
-
     clear()
 
     center(
@@ -1173,102 +1153,66 @@ local function showSystemInfo()
         storageTest()
 
     local info = {
-
-        "BIOS: "
-            .. VERSION,
-
+        "BIOS: " .. VERSION,
         "Computer ID: "
-            .. tostring(
-                os.getComputerID()
-            ),
-
+            .. tostring(os.getComputerID()),
         "Label: "
             .. tostring(
                 os.getComputerLabel()
                 or "Not set"
             ),
-
         "Boot File: "
             .. cfg.bootFile,
-
         "Boot Delay: "
-            .. tostring(
-                cfg.bootDelay
-            )
+            .. cfg.bootDelay
             .. " sec",
-
         "Auto Boot: "
-            .. tostring(
-                cfg.autoBoot
-            ),
-
+            .. tostring(cfg.autoBoot),
         "POST: "
-            .. tostring(
-                cfg.post
-            ),
-
+            .. tostring(cfg.post),
         "Safe Mode: "
-            .. tostring(
-                cfg.safe
-            ),
-
+            .. tostring(cfg.safe),
         "Secure Boot: "
-            .. tostring(
-                cfg.secure
-            ),
-
+            .. tostring(cfg.secure),
         "Strict Secure Boot: "
-            .. tostring(
-                cfg.strict
-            ),
-
+            .. tostring(cfg.strict),
         "Terminal: "
             .. w
             .. "x"
             .. h,
-
         "Storage Used: "
-            .. tostring(
-                storage
-            )
+            .. tostring(storage)
             .. " bytes",
-
         "Storage Test: "
-            .. tostring(
-                storageOK
-            ),
-
+            .. tostring(storageOK),
         "CC:Tweaked: "
             .. tostring(
                 _HOST
                 or "Unknown"
             ),
-
         "Graphics API: "
             .. tostring(
                 graphicsTest()
             )
     }
 
-    for i, text in ipairs(info) do
+    local maxLines =
+        math.max(
+            1,
+            terminalHeight() - 7
+        )
 
-        term.setCursorPos(
+    for i = 1,
+        math.min(
+            #info,
+            maxLines
+        ) do
+
+        writeAt(
             3,
-            4 + i
-        )
-
-        term.setTextColor(
+            4 + i,
+            info[i],
             C.white
-        )
-
-        term.write(
-            text:sub(
-                1,
-                math.max(
-                    1,
-                    w - 5
-                )
-            )
         )
     end
 
@@ -1280,7 +1224,6 @@ end
 -- ============================================================
 
 local function viewFile(path)
-
     local f = fs.open(
         path,
         "r"
@@ -1298,11 +1241,12 @@ local function viewFile(path)
     local lines = {}
 
     for text in data:gmatch(
-        "[^\r\n]+"
+        "[^\r\n]*"
     ) do
-
-        lines[#lines + 1] =
-            text
+        if text ~= "" then
+            lines[#lines + 1] =
+                text
+        end
     end
 
     if #lines == 0 then
@@ -1312,7 +1256,6 @@ local function viewFile(path)
     local top = 1
 
     while true do
-
         clear()
 
         center(
@@ -1326,8 +1269,8 @@ local function viewFile(path)
             C.gray
         )
 
-        local _, h =
-            term.getSize()
+        local h =
+            terminalHeight()
 
         local visible =
             math.max(
@@ -1336,46 +1279,29 @@ local function viewFile(path)
             )
 
         for i = 1, visible do
-
             local text =
                 lines[
                     top + i - 1
                 ]
 
             if text then
-
-                term.setCursorPos(
+                writeAt(
                     2,
-                    3 + i
-                )
-
-                term.setTextColor(
+                    3 + i,
+                    text,
                     C.white
-                )
-
-                term.write(
-                    text:sub(
-                        1,
-                        math.max(
-                            1,
-                            term.getSize() - 3
-                        )
-                    )
                 )
             end
         end
 
-        center(
-            h,
-            "UP/DOWN Scroll | BACKSPACE Back",
-            C.gray
+        footer(
+            "UP/DOWN Scroll | BACKSPACE Back"
         )
 
         local event, key =
             os.pullEvent("key")
 
         if key == keys.up then
-
             top =
                 math.max(
                     1,
@@ -1383,7 +1309,6 @@ local function viewFile(path)
                 )
 
         elseif key == keys.down then
-
             local maximum =
                 math.max(
                     1,
@@ -1397,7 +1322,6 @@ local function viewFile(path)
                 )
 
         elseif key == keys.backspace then
-
             return
         end
     end
@@ -1408,11 +1332,9 @@ end
 -- ============================================================
 
 local function fileManager()
-
     local dir = "/"
 
     while true do
-
         local list =
             fs.list(dir)
 
@@ -1420,8 +1342,11 @@ local function fileManager()
 
         local selected = 1
 
-        while true do
+        if #list == 0 then
+            selected = 0
+        end
 
+        while true do
             clear()
 
             center(
@@ -1441,8 +1366,8 @@ local function fileManager()
                 C.gray
             )
 
-            local _, h =
-                term.getSize()
+            local h =
+                terminalHeight()
 
             local maxItems =
                 math.max(
@@ -1450,85 +1375,78 @@ local function fileManager()
                     h - 7
                 )
 
-            local start = 1
-
-            if selected > maxItems then
-
-                start =
-                    selected
-                    - maxItems
-                    + 1
-            end
-
-            for i = start,
-                math.min(
-                    #list,
-                    start + maxItems - 1
-                ) do
-
-                local row =
-                    5
-                    + (i - start)
-
-                term.setCursorPos(
-                    3,
-                    row
+            if #list == 0 then
+                center(
+                    7,
+                    "Directory is empty.",
+                    C.gray
                 )
+            else
+                local start = 1
 
-                if i == selected then
-
-                    term.setTextColor(
-                        C.lime
-                    )
-
-                    term.write(
-                        "> "
-                    )
-
-                else
-
-                    term.setTextColor(
-                        C.white
-                    )
-
-                    term.write(
-                        "  "
-                    )
+                if selected > maxItems then
+                    start =
+                        selected
+                        - maxItems
+                        + 1
                 end
 
-                local path =
-                    fs.combine(
-                        dir,
-                        list[i]
-                    )
+                for i = start,
+                    math.min(
+                        #list,
+                        start + maxItems - 1
+                    ) do
 
-                if fs.isDir(path) then
+                    local row =
+                        5
+                        + i
+                        - start
 
-                    term.setTextColor(
-                        C.cyan
-                    )
+                    local prefix
 
-                    term.write(
-                        "[DIR] "
-                        .. list[i]
-                    )
+                    if i == selected then
+                        prefix = "> "
+                    else
+                        prefix = "  "
+                    end
 
-                else
+                    local path =
+                        fs.combine(
+                            dir,
+                            list[i]
+                        )
 
-                    term.setTextColor(
+                    local label
+
+                    if fs.isDir(path) then
+                        label =
+                            "[DIR] "
+                            .. list[i]
+                    else
+                        label =
+                            list[i]
+                    end
+
+                    local colour =
                         C.white
-                    )
 
-                    term.write(
-                        list[i]
+                    if i == selected then
+                        colour = C.lime
+                    elseif fs.isDir(path) then
+                        colour = C.cyan
+                    end
+
+                    writeAt(
+                        3,
+                        row,
+                        prefix .. label,
+                        colour
                     )
                 end
             end
 
-            center(
-                h,
-                "ENTER Open | BACKSPACE Back",
-                C.gray
+            footer(
+                "ENTER Open | BACKSPACE Back"
             )
 
             local event, key =
@@ -1555,6 +1473,7 @@ local function fileManager()
                 end
 
             elseif key == keys.enter
+                and #list > 0
                 and list[selected] then
 
                 local path =
@@ -1564,13 +1483,9 @@ local function fileManager()
                     )
 
                 if fs.isDir(path) then
-
                     dir = path
-
                     break
-
                 else
-
                     viewFile(path)
                 end
 
@@ -1594,11 +1509,10 @@ local function fileManager()
 end
 
 -- ============================================================
--- Boot File Scanner
+-- Boot Scanner
 -- ============================================================
 
 local function scanBootFiles()
-
     local list = {}
 
     for _, name in ipairs(
@@ -1606,7 +1520,6 @@ local function scanBootFiles()
     ) do
 
         if not fs.isDir(name) then
-
             local lower =
                 string.lower(name)
 
@@ -1631,12 +1544,10 @@ end
 -- ============================================================
 
 local function bootManager()
-
     local list =
         scanBootFiles()
 
     if #list == 0 then
-
         clear()
 
         center(
@@ -1653,7 +1564,6 @@ local function bootManager()
     local selected = 1
 
     while true do
-
         clear()
 
         center(
@@ -1673,51 +1583,61 @@ local function bootManager()
             C.gray
         )
 
-        for i, name in ipairs(list) do
+        local h =
+            terminalHeight()
 
-            term.setCursorPos(
-                4,
-                4 + i
+        local maxItems =
+            math.max(
+                1,
+                h - 7
             )
 
-            if i == selected then
+        local start = 1
 
-                term.setTextColor(
-                    C.lime
-                )
-
-                term.write(
-                    "> "
-                    .. name
-                )
-
-            else
-
-                term.setTextColor(
-                    C.white
-                )
-
-                term.write(
-                    "  "
-                    .. name
-                )
-            end
+        if selected > maxItems then
+            start =
+                selected
+                - maxItems
+                + 1
         end
 
-        local _, h =
-            term.getSize()
+        for i = start,
+            math.min(
+                #list,
+                start + maxItems - 1
+            ) do
 
-        center(
-            h,
-            "ENTER Boot | BACKSPACE Back",
-            C.gray
+            local row =
+                4
+                + i
+                - start
+
+            local prefix
+
+            if i == selected then
+                prefix = "> "
+            else
+                prefix = "  "
+            end
+
+            writeAt(
+                4,
+                row,
+                prefix .. list[i],
+                i == selected
+                    and C.lime
+                    or C.white
+            )
+        end
+
+        footer(
+            "ENTER Boot | BACKSPACE Back"
         )
 
         local event, key =
             os.pullEvent("key")
 
         if key == keys.up then
-
             selected =
                 selected - 1
 
@@ -1726,7 +1646,6 @@ local function bootManager()
             end
 
         elseif key == keys.down then
-
             selected =
                 selected + 1
 
@@ -1757,7 +1676,6 @@ local function bootManager()
             )
 
         elseif key == keys.backspace then
-
             return
         end
     end
@@ -1768,7 +1686,6 @@ end
 -- ============================================================
 
 local function diagnostics()
-
     clear()
 
     center(
@@ -1783,12 +1700,10 @@ local function diagnostics()
     )
 
     local tests = {
-
         {
             "Computer",
             function()
-                return os.getComputerID()
-                    ~= nil
+                return os.getComputerID() ~= nil
             end
         },
 
@@ -1837,7 +1752,6 @@ local function diagnostics()
         {
             "Boot File",
             function()
-
                 return fs.exists(
                     cfg.bootFile
                 )
@@ -1850,7 +1764,6 @@ local function diagnostics()
         {
             "Secure Boot",
             function()
-
                 return verifyBootFile(
                     cfg.bootFile
                 )
@@ -1861,45 +1774,42 @@ local function diagnostics()
     local y = 5
 
     for _, test in ipairs(tests) do
+        if y >= terminalHeight() - 2 then
+            break
+        end
 
-        term.setCursorPos(
+        writeAt(
             3,
-            y
-        )
-
-        term.setTextColor(
+            y,
+            test[1],
             C.white
         )
 
-        term.write(
-            test[1]
-        )
-
         local ok, result =
-            safeCall(
-                test[2]
-            )
+            safeCall(test[2])
+
+        local status
+        local colour
 
         if ok and result then
-
-            term.setTextColor(
-                C.green
-            )
-
-            term.write(
-                " [ OK ]"
-            )
-
+            status = "[ OK ]"
+            colour = C.green
         else
-
-            term.setTextColor(
-                C.red
-            )
-
-            term.write(
-                " [FAIL]"
-            )
+            status = "[FAIL]"
+            colour = C.red
         end
+
+        writeAt(
+            math.max(
+                1,
+                terminalWidth()
+                    - #status
+                    - 2
+            ),
+            y,
+            status,
+            colour
+        )
 
         y = y + 1
     end
@@ -1912,7 +1822,6 @@ end
 -- ============================================================
 
 local function editBootFile()
-
     clear()
 
     center(
@@ -1921,21 +1830,19 @@ local function editBootFile()
         C.lightBlue
     )
 
-    term.setCursorPos(
+    writeAt(
         3,
-        6
-    )
-
-    term.setTextColor(
+        6,
+        "File: ",
         C.white
     )
 
-    term.write(
-        "File: "
-    )
+    term.setCursorBlink(true)
 
     local value =
         read()
+
+    term.setCursorBlink(false)
 
     if value
         and value ~= "" then
@@ -1953,7 +1860,6 @@ local function editBootFile()
 end
 
 local function editBootDelay()
-
     clear()
 
     center(
@@ -1962,34 +1868,29 @@ local function editBootDelay()
         C.lightBlue
     )
 
-    term.setCursorPos(
+    writeAt(
         3,
-        6
-    )
-
-    term.setTextColor(
+        6,
+        "Seconds 0-30: ",
         C.white
     )
 
-    term.write(
-        "Seconds 0-30: "
-    )
+    term.setCursorBlink(true)
 
     local value =
         tonumber(
             read()
         )
 
-    if value then
+    term.setCursorBlink(false)
 
+    if value then
         cfg.bootDelay =
             math.max(
                 0,
                 math.min(
                     30,
-                    math.floor(
-                        value
-                    )
+                    math.floor(value)
                 )
             )
 
@@ -1998,13 +1899,10 @@ local function editBootDelay()
 end
 
 local function settings()
-
     local selected = 1
 
     while true do
-
         local list = {
-
             "Boot File: "
                 .. cfg.bootFile,
 
@@ -2087,8 +1985,8 @@ local function settings()
             C.gray
         )
 
-        local _, h =
-            term.getSize()
+        local h =
+            terminalHeight()
 
         local maxItems =
             math.max(
@@ -2099,7 +1997,6 @@ local function settings()
         local start = 1
 
         if selected > maxItems then
-
             start =
                 selected
                 - maxItems
@@ -2117,48 +2014,32 @@ local function settings()
                 + i
                 - start
 
-            term.setCursorPos(
-                3,
-                row
-            )
+            local prefix
 
             if i == selected then
-
-                term.setTextColor(
-                    C.lime
-                )
-
-                term.write(
-                    "> "
-                )
-
+                prefix = "> "
             else
-
-                term.setTextColor(
-                    C.white
-                )
-
-                term.write(
-                    "  "
-                )
+                prefix = "  "
             end
 
-            term.write(
-                list[i]
+            writeAt(
+                3,
+                row,
+                prefix .. list[i],
+                i == selected
+                    and C.lime
+                    or C.white
             )
         end
 
-        center(
-            h,
-            "UP/DOWN Navigate | ENTER Select | BACKSPACE Back",
-            C.gray
+        footer(
+            "UP/DOWN Navigate | ENTER Select | BACKSPACE Back"
         )
 
         local event, key =
             os.pullEvent("key")
 
         if key == keys.up then
-
             selected =
                 selected - 1
 
@@ -2167,7 +2048,6 @@ local function settings()
             end
 
         elseif key == keys.down then
-
             selected =
                 selected + 1
 
@@ -2176,81 +2056,60 @@ local function settings()
             end
 
         elseif key == keys.backspace then
-
             return
 
         elseif key == keys.enter then
 
             if selected == 1 then
-
                 editBootFile()
 
             elseif selected == 2 then
-
                 editBootDelay()
 
             elseif selected == 3 then
-
                 cfg.autoBoot =
                     not cfg.autoBoot
-
                 saveConfig()
 
             elseif selected == 4 then
-
                 cfg.post =
                     not cfg.post
-
                 saveConfig()
 
             elseif selected == 5 then
-
                 cfg.safe =
                     not cfg.safe
-
                 saveConfig()
 
             elseif selected == 6 then
-
                 cfg.secure =
                     not cfg.secure
-
                 saveConfig()
 
             elseif selected == 7 then
-
                 cfg.strict =
                     not cfg.strict
-
                 saveConfig()
 
             elseif selected == 8 then
-
                 cfg.animations =
                     not cfg.animations
-
                 saveConfig()
 
             elseif selected == 9 then
-
                 cfg.showLogo =
                     not cfg.showLogo
-
                 saveConfig()
 
             elseif selected == 10 then
-
                 cfg.bootLog =
                     not cfg.bootLog
-
                 saveConfig()
 
             elseif selected == 11 then
-
                 createIntegrityRecord()
 
             elseif selected == 12 then
-
                 resetConfig()
 
                 log(
@@ -2258,7 +2117,6 @@ local function settings()
                 )
 
             elseif selected == 13 then
-
                 return
             end
         end
@@ -2270,25 +2128,16 @@ end
 -- ============================================================
 
 local function safeMode()
-
     local selected = 1
 
     while true do
-
         local list = {
-
             "CraftOS Shell",
-
             "Boot Manager",
-
             "File Manager",
-
             "Diagnostics",
-
             "Recovery",
-
             "Restart",
-
             "Shutdown"
         }
 
@@ -2312,50 +2161,27 @@ local function safeMode()
         )
 
         for i, text in ipairs(list) do
-
-            term.setCursorPos(
+            writeAt(
                 4,
-                5 + i
+                5 + i,
+                (i == selected
+                    and "> "
+                    or "  ")
+                    .. text,
+                i == selected
+                    and C.lime
+                    or C.white
             )
-
-            if i == selected then
-
-                term.setTextColor(
-                    C.lime
-                )
-
-                term.write(
-                    "> "
-                    .. text
-                )
-
-            else
-
-                term.setTextColor(
-                    C.white
-                )
-
-                term.write(
-                    "  "
-                    .. text
-                )
-            end
         end
 
-        local _, h =
-            term.getSize()
-
-        center(
-            h,
-            "UP/DOWN Navigate | ENTER Select",
-            C.gray
+        footer(
+            "UP/DOWN Navigate | ENTER Select"
         )
 
         local event, key =
             os.pullEvent("key")
 
         if key == keys.up then
-
             selected =
                 selected - 1
 
@@ -2364,7 +2190,6 @@ local function safeMode()
             end
 
         elseif key == keys.down then
-
             selected =
                 selected + 1
 
@@ -2375,31 +2200,24 @@ local function safeMode()
         elseif key == keys.enter then
 
             if selected == 1 then
-
                 shell.run("shell")
 
             elseif selected == 2 then
-
                 bootManager()
 
             elseif selected == 3 then
-
                 fileManager()
 
             elseif selected == 4 then
-
                 diagnostics()
 
             elseif selected == 5 then
-
                 return "recovery"
 
             elseif selected == 6 then
-
                 os.reboot()
 
             elseif selected == 7 then
-
                 os.shutdown()
             end
         end
@@ -2411,33 +2229,20 @@ end
 -- ============================================================
 
 local function recovery()
-
     local selected = 1
 
     while true do
-
         local list = {
-
             "Retry Normal Boot",
-
             "Safe Mode",
-
             "CraftOS Shell",
-
             "Boot Manager",
-
             "File Manager",
-
             "Diagnostics",
-
             "Last Boot Record",
-
             "Reset BIOS Settings",
-
             "Restart",
-
             "Shutdown",
-
             "Back"
         }
 
@@ -2454,51 +2259,56 @@ local function recovery()
             C.gray
         )
 
-        for i, text in ipairs(list) do
+        local h =
+            terminalHeight()
 
-            term.setCursorPos(
-                4,
-                4 + i
+        local maxItems =
+            math.max(
+                1,
+                h - 6
             )
 
-            if i == selected then
+        local start = 1
 
-                term.setTextColor(
-                    C.lime
-                )
-
-                term.write(
-                    "> "
-                    .. text
-                )
-
-            else
-
-                term.setTextColor(
-                    C.white
-                )
-
-                term.write(
-                    "  "
-                    .. text
-                )
-            end
+        if selected > maxItems then
+            start =
+                selected
+                - maxItems
+                + 1
         end
 
-        local _, h =
-            term.getSize()
+        for i = start,
+            math.min(
+                #list,
+                start + maxItems - 1
+            ) do
 
-        center(
-            h,
-            "UP/DOWN Navigate | ENTER Select | BACKSPACE Back",
-            C.gray
+            local row =
+                4
+                + i
+                - start
+
+            writeAt(
+                4,
+                row,
+                (i == selected
+                    and "> "
+                    or "  ")
+                    .. list[i],
+                i == selected
+                    and C.lime
+                    or C.white
+            )
+        end
+
+        footer(
+            "UP/DOWN Navigate | ENTER Select | BACKSPACE Back"
         )
 
         local event, key =
             os.pullEvent("key")
 
         if key == keys.up then
-
             selected =
                 selected - 1
 
@@ -2507,7 +2317,6 @@ local function recovery()
             end
 
         elseif key == keys.down then
-
             selected =
                 selected + 1
 
@@ -2516,7 +2325,6 @@ local function recovery()
             end
 
         elseif key == keys.backspace then
-
             return
 
         elseif key == keys.enter then
@@ -2535,31 +2343,24 @@ local function recovery()
                 end
 
             elseif selected == 2 then
-
                 return "safe"
 
             elseif selected == 3 then
-
                 shell.run("shell")
 
             elseif selected == 4 then
-
                 bootManager()
 
             elseif selected == 5 then
-
                 fileManager()
 
             elseif selected == 6 then
-
                 diagnostics()
 
             elseif selected == 7 then
-
                 showLastBoot()
 
             elseif selected == 8 then
-
                 resetConfig()
 
                 log(
@@ -2567,15 +2368,12 @@ local function recovery()
                 )
 
             elseif selected == 9 then
-
                 os.reboot()
 
             elseif selected == 10 then
-
                 os.shutdown()
 
             elseif selected == 11 then
-
                 return
             end
         end
@@ -2587,42 +2385,30 @@ end
 -- ============================================================
 
 local function biosMenu()
-
     local selected = 1
 
     while true do
-
         local list = {
-
             "Boot",
-
             "Boot Manager",
-
             "System Information",
-
             "Last Boot Record",
-
             "File Manager",
-
             "BIOS Settings",
-
             "Diagnostics Center",
-
             "Recovery Center",
-
             "CraftOS Shell",
-
             "Restart",
-
             "Shutdown"
         }
 
         clear()
 
-        if cfg.showLogo then
+        local h =
+            terminalHeight()
 
-            local _, h =
-                term.getSize()
+        if cfg.showLogo
+            and h >= 25 then
 
             local y =
                 math.max(
@@ -2656,23 +2442,25 @@ local function biosMenu()
                 VERSION,
                 C.gray
             )
-        end
 
-        local _, h =
-            term.getSize()
+            line(
+                4,
+                C.gray
+            )
+        end
 
         local startY
 
-        if cfg.showLogo then
+        if cfg.showLogo
+            and h >= 25 then
 
             startY =
                 math.max(
-                    4,
-                    math.floor(h / 2) - 1
+                    18,
+                    math.floor(h / 2)
                 )
 
         else
-
             startY = 5
         end
 
@@ -2685,7 +2473,6 @@ local function biosMenu()
         local start = 1
 
         if selected > maxVisible then
-
             start =
                 selected
                 - maxVisible
@@ -2698,48 +2485,29 @@ local function biosMenu()
                 start + maxVisible - 1
             ) do
 
-            term.setCursorPos(
+            writeAt(
                 5,
                 startY
-                + i
-                - start
+                    + i
+                    - start,
+                (i == selected
+                    and "> "
+                    or "  ")
+                    .. list[i],
+                i == selected
+                    and C.lime
+                    or C.white
             )
-
-            if i == selected then
-
-                term.setTextColor(
-                    C.lime
-                )
-
-                term.write(
-                    "> "
-                    .. list[i]
-                )
-
-            else
-
-                term.setTextColor(
-                    C.white
-                )
-
-                term.write(
-                    "  "
-                    .. list[i]
-                )
-            end
         end
 
-        center(
-            h,
-            "UP/DOWN Navigate | ENTER Select",
-            C.gray
+        footer(
+            "UP/DOWN Navigate | ENTER Select"
         )
 
         local event, key =
             os.pullEvent("key")
 
         if key == keys.up then
-
             selected =
                 selected - 1
 
@@ -2748,7 +2516,6 @@ local function biosMenu()
             end
 
         elseif key == keys.down then
-
             selected =
                 selected + 1
 
@@ -2759,31 +2526,24 @@ local function biosMenu()
         elseif key == keys.enter then
 
             if selected == 1 then
-
                 return "boot"
 
             elseif selected == 2 then
-
                 bootManager()
 
             elseif selected == 3 then
-
                 showSystemInfo()
 
             elseif selected == 4 then
-
                 showLastBoot()
 
             elseif selected == 5 then
-
                 fileManager()
 
             elseif selected == 6 then
-
                 settings()
 
             elseif selected == 7 then
-
                 diagnostics()
 
             elseif selected == 8 then
@@ -2796,15 +2556,12 @@ local function biosMenu()
                 end
 
             elseif selected == 9 then
-
                 shell.run("shell")
 
             elseif selected == 10 then
-
                 os.reboot()
 
             elseif selected == 11 then
-
                 os.shutdown()
             end
         end
@@ -2816,7 +2573,6 @@ end
 -- ============================================================
 
 local function countdown()
-
     if cfg.bootDelay <= 0 then
         return "boot"
     end
@@ -2828,11 +2584,10 @@ local function countdown()
         os.startTimer(1)
 
     while left > 0 do
-
         clear()
 
-        local _, h =
-            term.getSize()
+        local h =
+            terminalHeight()
 
         local y =
             math.max(
@@ -2856,9 +2611,9 @@ local function countdown()
         center(
             y + 17,
             "Booting "
-            .. cfg.bootFile
-            .. " in "
-            .. left,
+                .. cfg.bootFile
+                .. " in "
+                .. left,
             C.white
         )
 
@@ -2896,7 +2651,6 @@ local function countdown()
                 left - 1
 
             if left > 0 then
-
                 timer =
                     os.startTimer(1)
             end
