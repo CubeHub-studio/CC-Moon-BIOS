@@ -1,0 +1,1307 @@
+-- ============================================================
+-- MOON BIOS v1.3
+-- REGULAR COMPUTER ADVANCE EDITION
+--
+-- Designed for:
+--   CC:Tweaked Computer
+--
+-- Features:
+--   - Moon BIOS logo
+--   - POST diagnostics
+--   - Boot Manager
+--   - Recovery Center
+--   - Safe Mode
+--   - System Information
+--   - Last Boot Record
+--   - File Manager
+--   - BIOS Settings
+--   - Secure Boot
+--   - Strict Secure Boot
+--   - Boot logging
+--   - Reset BIOS settings
+--   - Filesystem validation
+--   - Bootfile validation
+--   - Automatic bootfile detection
+--   - Compact pocket UI
+--
+-- Controls:
+--   Up / Down = navigate
+--   Enter     = select
+--   Backspace = back
+--
+-- ESC IS NOT USED
+-- ============================================================
+
+local BIOS_VERSION = "Moon BIOS v1.2 advance"
+local BOOTFILE = "bootfile"
+
+local SETTINGS_FILE = "moon_bios_settings"
+local BOOTLOG_FILE = "moon_boot.log"
+local LAST_BOOT_FILE = "moon_last_boot"
+
+-- ============================================================
+-- COLORS
+-- ============================================================
+
+local C = {
+    bg = colors.black,
+    fg = colors.white,
+    accent = colors.lightBlue,
+    dim = colors.gray,
+    good = colors.lime,
+    bad = colors.red,
+    warn = colors.yellow,
+    panel = colors.gray,
+    panelText = colors.black
+}
+
+-- ============================================================
+-- STATE
+-- ============================================================
+
+local settings = {
+    secureBoot = true,
+    strictSecureBoot = false,
+    autoBoot = true,
+    bootDelay = 2
+}
+
+local menuIndex = 1
+local running = true
+local lastBootOK = false
+
+-- ============================================================
+-- SCREEN HELPERS
+-- ============================================================
+
+local function w()
+    return term.getSize()
+end
+
+local function clear()
+    term.setBackgroundColor(C.bg)
+    term.setTextColor(C.fg)
+    term.clear()
+    term.setCursorPos(1, 1)
+end
+
+local function center(text, y, color)
+    local width = select(1, w())
+
+    term.setTextColor(color or C.fg)
+
+    local x = math.floor(
+        (width - #text) / 2
+    ) + 1
+
+    if x < 1 then
+        x = 1
+    end
+
+    term.setCursorPos(x, y)
+    term.write(text)
+end
+
+local function line(y, char)
+    local width = select(1, w())
+
+    term.setTextColor(C.dim)
+    term.setCursorPos(1, y)
+    term.write(
+        string.rep(char or "-", width)
+    )
+end
+
+local function message(text, color)
+    term.setTextColor(color or C.fg)
+
+    local width, height = w()
+
+    local lines = {}
+
+    while #text > width - 2 do
+        local part = text:sub(1, width - 2)
+
+        local space = part:match("^.*()%s")
+
+        if space and space > 1 then
+            part = text:sub(1, space - 1)
+            text = text:sub(space + 1)
+        else
+            text = text:sub(width - 1)
+        end
+
+        table.insert(lines, part)
+    end
+
+    if #text > 0 then
+        table.insert(lines, text)
+    end
+
+    local y = math.floor(height / 2)
+
+    for i = 1, #lines do
+        center(lines[i], y + i - 1)
+    end
+end
+
+-- ============================================================
+-- MOON LOGO
+-- ============================================================
+
+local MOON = {
+    "             ######",
+    "           #######",
+    "        #########",
+    "      #########",
+    "     ########",
+    "    #######",
+    "    #####",
+    "     #######",
+    "      ########",
+    "       ########",
+    "        #########",
+    "           #######",
+    "             ######"
+}
+
+local function drawMoon()
+    clear()
+
+    local width, height = w()
+
+    local startY =
+        math.max(
+            1,
+            math.floor(height / 2) - 8
+        )
+
+    for i = 1, #MOON do
+        local row = MOON[i]
+
+        if #row <= width then
+            center(
+                row,
+                startY + i - 1,
+                C.accent
+            )
+        end
+    end
+
+    center(
+        "Moon BIOS",
+        math.min(height, startY + #MOON + 1),
+        C.fg
+    )
+
+    center(
+        BIOS_VERSION,
+        math.min(height, startY + #MOON + 2),
+        C.dim
+    )
+end
+
+-- ============================================================
+-- BOOT LOG
+-- ============================================================
+
+local function bootLog(text)
+    pcall(function()
+        local f = fs.open(BOOTLOG_FILE, "a")
+
+        if f then
+            f.writeLine(
+                os.date("%Y-%m-%d %H:%M:%S")
+                .. " | "
+                .. text
+            )
+
+            f.close()
+        end
+    end)
+end
+
+local function saveLastBoot(status, reason)
+    pcall(function()
+        local f = fs.open(LAST_BOOT_FILE, "w")
+
+        if f then
+            f.writeLine("STATUS=" .. status)
+            f.writeLine("REASON=" .. reason)
+            f.writeLine("TIME=" .. os.date("%Y-%m-%d %H:%M:%S"))
+            f.close()
+        end
+    end)
+end
+
+local function readLastBoot()
+    if not fs.exists(LAST_BOOT_FILE) then
+        return nil
+    end
+
+    local result = {}
+
+    local f = fs.open(LAST_BOOT_FILE, "r")
+
+    if not f then
+        return nil
+    end
+
+    while true do
+        local line = f.readLine()
+
+        if not line then
+            break
+        end
+
+        table.insert(result, line)
+    end
+
+    f.close()
+
+    return result
+end
+
+-- ============================================================
+-- SETTINGS
+-- ============================================================
+
+local function saveSettings()
+    pcall(function()
+        local f = fs.open(SETTINGS_FILE, "w")
+
+        if f then
+            f.writeLine(
+                "secureBoot=" ..
+                tostring(settings.secureBoot)
+            )
+
+            f.writeLine(
+                "strictSecureBoot=" ..
+                tostring(settings.strictSecureBoot)
+            )
+
+            f.writeLine(
+                "autoBoot=" ..
+                tostring(settings.autoBoot)
+            )
+
+            f.writeLine(
+                "bootDelay=" ..
+                tostring(settings.bootDelay)
+            )
+
+            f.close()
+        end
+    end)
+end
+
+local function loadSettings()
+    if not fs.exists(SETTINGS_FILE) then
+        saveSettings()
+        return
+    end
+
+    local f = fs.open(SETTINGS_FILE, "r")
+
+    if not f then
+        return
+    end
+
+    while true do
+        local line = f.readLine()
+
+        if not line then
+            break
+        end
+
+        local key, value =
+            line:match("^(.-)=(.*)$")
+
+        if key == "secureBoot" then
+            settings.secureBoot =
+                value == "true"
+
+        elseif key == "strictSecureBoot" then
+            settings.strictSecureBoot =
+                value == "true"
+
+        elseif key == "autoBoot" then
+            settings.autoBoot =
+                value == "true"
+
+        elseif key == "bootDelay" then
+            settings.bootDelay =
+                tonumber(value) or 2
+        end
+    end
+
+    f.close()
+end
+
+-- ============================================================
+-- VALIDATION
+-- ============================================================
+
+local function validateFilesystem()
+    local required = {
+        "/rom",
+        "/rom/apis",
+        "/rom/programs"
+    }
+
+    for _, path in ipairs(required) do
+        if not fs.exists(path) then
+            return false,
+                "Missing " .. path
+        end
+    end
+
+    return true, "Filesystem OK"
+end
+
+local function validateBootfile()
+    if not fs.exists(BOOTFILE) then
+        return false,
+            "bootfile not found"
+    end
+
+    if fs.isDir(BOOTFILE) then
+        return false,
+            "bootfile is a directory"
+    end
+
+    return true, "bootfile OK"
+end
+
+local function secureBootCheck()
+    if not settings.secureBoot then
+        return true, "Secure Boot disabled"
+    end
+
+    local ok, reason = validateBootfile()
+
+    if not ok then
+        return false, reason
+    end
+
+    if settings.strictSecureBoot then
+        local size = fs.getSize(BOOTFILE)
+
+        if not size or size <= 0 then
+            return false,
+                "Strict Secure Boot rejected bootfile"
+        end
+    end
+
+    return true, "Secure Boot passed"
+end
+
+-- ============================================================
+-- POST
+-- ============================================================
+
+local function postLine(label, result, reason)
+    local width, height = w()
+
+    term.setCursorPos(1, height)
+
+    if result then
+        term.setTextColor(C.good)
+        term.write("[OK] ")
+    else
+        term.setTextColor(C.bad)
+        term.write("[FAIL] ")
+    end
+
+    term.setTextColor(C.fg)
+
+    local text = label
+
+    if reason then
+        text = text .. ": " .. reason
+    end
+
+    local remaining =
+        width - #term.getCursorPos()
+
+    term.write(
+        text:sub(
+            1,
+            math.max(0, width - 7)
+        )
+    )
+end
+
+local function runPOST()
+    clear()
+
+    center(
+        "Moon BIOS POST",
+        2,
+        C.accent
+    )
+
+    line(3, "-")
+
+    local checks = {
+        {
+            "Computer",
+            function()
+                return true, "Detected"
+            end
+        },
+
+        {
+            "Pocket Computer",
+            function()
+                local computerType =
+                    os.computerLabel and
+                    "Detected" or
+                    "Detected"
+
+                return true, computerType
+            end
+        },
+
+        {
+            "Filesystem",
+            validateFilesystem
+        },
+
+        {
+            "Bootfile",
+            validateBootfile
+        },
+
+        {
+            "Secure Boot",
+            secureBootCheck
+        }
+    }
+
+    local y = 5
+
+    for _, check in ipairs(checks) do
+        term.setCursorPos(1, y)
+
+        local ok, reason =
+            pcall(check[2])
+
+        if not ok then
+            ok = false
+            reason = "Check error"
+        end
+
+        if ok then
+            term.setTextColor(C.good)
+            term.write("[OK] ")
+        else
+            term.setTextColor(C.bad)
+            term.write("[FAIL] ")
+        end
+
+        term.setTextColor(C.fg)
+
+        local text =
+            check[1] ..
+            " - " ..
+            tostring(reason)
+
+        local width = select(1, w())
+
+        term.write(
+            text:sub(
+                1,
+                math.max(1, width - 6)
+            )
+        )
+
+        y = y + 1
+    end
+
+    bootLog("POST completed")
+
+    sleep(1.5)
+end
+
+-- ============================================================
+-- GENERIC LIST MENU
+-- ============================================================
+
+local function drawMenu(title, items)
+    clear()
+
+    local width, height = w()
+
+    center(
+        title,
+        1,
+        C.accent
+    )
+
+    line(2, "=")
+
+    local maxVisible =
+        math.max(
+            1,
+            height - 5
+        )
+
+    local start =
+        math.max(
+            1,
+            menuIndex - maxVisible + 1
+        )
+
+    if start > #items then
+        start = #items
+    end
+
+    local y = 4
+
+    for i = start,
+        math.min(
+            #items,
+            start + maxVisible - 1
+        ) do
+
+        if i == menuIndex then
+            term.setBackgroundColor(C.panel)
+            term.setTextColor(C.panelText)
+        else
+            term.setBackgroundColor(C.bg)
+            term.setTextColor(C.fg)
+        end
+
+        term.setCursorPos(1, y)
+
+        local prefix
+
+        if i == menuIndex then
+            prefix = "> "
+        else
+            prefix = "  "
+        end
+
+        local text =
+            prefix .. items[i]
+
+        term.write(
+            text:sub(
+                1,
+                width
+            )
+        )
+
+        term.setBackgroundColor(C.bg)
+
+        y = y + 1
+    end
+
+    term.setTextColor(C.dim)
+
+    if height >= 2 then
+        term.setCursorPos(
+            1,
+            height
+        )
+
+        term.write(
+            "UP/DOWN  ENTER  BACK"
+        )
+    end
+end
+
+local function menu(items)
+    menuIndex = 1
+
+    while true do
+        drawMenu("", items)
+
+        local event, key =
+            os.pullEvent("key")
+
+        if key == keys.up then
+            menuIndex =
+                math.max(
+                    1,
+                    menuIndex - 1
+                )
+
+        elseif key == keys.down then
+            menuIndex =
+                math.min(
+                    #items,
+                    menuIndex + 1
+                )
+
+        elseif key == keys.enter then
+            return menuIndex
+
+        elseif key == keys.backspace then
+            return nil
+        end
+    end
+end
+
+-- ============================================================
+-- INFORMATION SCREEN
+-- ============================================================
+
+local function information(title, lines)
+    while true do
+        clear()
+
+        center(
+            title,
+            1,
+            C.accent
+        )
+
+        line(2, "-")
+
+        local _, height = w()
+
+        local y = 4
+
+        for _, value in ipairs(lines) do
+            if y >= height - 1 then
+                break
+            end
+
+            term.setCursorPos(1, y)
+            term.setTextColor(C.fg)
+
+            term.write(
+                tostring(value):sub(
+                    1,
+                    select(1, w())
+                )
+            )
+
+            y = y + 1
+        end
+
+        term.setTextColor(C.dim)
+
+        term.setCursorPos(
+            1,
+            height
+        )
+
+        term.write(
+            "BACKSPACE = BACK"
+        )
+
+        local event, key =
+            os.pullEvent("key")
+
+        if key == keys.backspace then
+            return
+        end
+    end
+end
+
+-- ============================================================
+-- SYSTEM INFORMATION
+-- ============================================================
+
+local function systemInfo()
+    local width, height =
+        term.getSize()
+
+    local computerID =
+        os.getComputerID()
+
+    local label =
+        os.getComputerLabel()
+
+    if not label then
+        label = "(none)"
+    end
+
+    local lines = {
+        "Moon BIOS: " .. BIOS_VERSION,
+        "Computer ID: " .. tostring(computerID),
+        "Label: " .. tostring(label),
+        "Type: Regular Computer (Advance)",
+        "Screen: " ..
+            tostring(width) ..
+            "x" ..
+            tostring(height),
+        "ComputerCraft: CC:Tweaked",
+        "",
+        "Secure Boot: " ..
+            tostring(settings.secureBoot),
+        "Strict Secure Boot: " ..
+            tostring(settings.strictSecureBoot),
+        "Auto Boot: " ..
+            tostring(settings.autoBoot)
+    }
+
+    information(
+        "SYSTEM INFORMATION",
+        lines
+    )
+end
+
+-- ============================================================
+-- LAST BOOT RECORD
+-- ============================================================
+
+local function lastBoot()
+    local data = readLastBoot()
+
+    if not data then
+        data = {
+            "No previous boot record."
+        }
+    end
+
+    information(
+        "LAST BOOT RECORD",
+        data
+    )
+end
+
+-- ============================================================
+-- FILE MANAGER
+-- ============================================================
+
+local function fileManager()
+    while true do
+        local files = fs.list("/")
+
+        local items = {}
+
+        for _, name in ipairs(files) do
+            if fs.isDir("/" .. name) then
+                table.insert(
+                    items,
+                    "[DIR] " .. name
+                )
+            else
+                table.insert(
+                    items,
+                    name
+                )
+            end
+        end
+
+        table.insert(
+            items,
+            "Back"
+        )
+
+        local choice =
+            menu(items)
+
+        if not choice then
+            return
+        end
+
+        if choice == #items then
+            return
+        end
+
+        local selected =
+            items[choice]
+
+        local name =
+            selected:gsub("^%[DIR%] ", "")
+
+        local path = "/" .. name
+
+        local size = 0
+
+        if not fs.isDir(path) then
+            size = fs.getSize(path)
+        end
+
+        information(
+            name,
+            {
+                "Path: " .. path,
+                "Directory: " ..
+                    tostring(fs.isDir(path)),
+                "Size: " ..
+                    tostring(size) ..
+                    " bytes",
+                "",
+                "BACKSPACE = BACK"
+            }
+        )
+    end
+end
+
+-- ============================================================
+-- BIOS SETTINGS
+-- ============================================================
+
+local function biosSettings()
+    while true do
+        local secure =
+            "Secure Boot: " ..
+            (settings.secureBoot and
+                "ON" or "OFF")
+
+        local strict =
+            "Strict Secure Boot: " ..
+            (settings.strictSecureBoot and
+                "ON" or "OFF")
+
+        local auto =
+            "Automatic Boot: " ..
+            (settings.autoBoot and
+                "ON" or "OFF")
+
+        local delay =
+            "Boot Delay: " ..
+            tostring(settings.bootDelay) ..
+            " sec"
+
+        local items = {
+            secure,
+            strict,
+            auto,
+            delay,
+            "Reset Settings",
+            "Back"
+        }
+
+        local choice =
+            menu(items)
+
+        if not choice then
+            return
+        end
+
+        if choice == 1 then
+            settings.secureBoot =
+                not settings.secureBoot
+
+            saveSettings()
+
+        elseif choice == 2 then
+            settings.strictSecureBoot =
+                not settings.strictSecureBoot
+
+            saveSettings()
+
+        elseif choice == 3 then
+            settings.autoBoot =
+                not settings.autoBoot
+
+            saveSettings()
+
+        elseif choice == 4 then
+            settings.bootDelay =
+                settings.bootDelay + 1
+
+            if settings.bootDelay > 5 then
+                settings.bootDelay = 0
+            end
+
+            saveSettings()
+
+        elseif choice == 5 then
+            settings.secureBoot = true
+            settings.strictSecureBoot = false
+            settings.autoBoot = true
+            settings.bootDelay = 2
+
+            saveSettings()
+
+        elseif choice == 6 then
+            return
+        end
+    end
+end
+
+-- ============================================================
+-- RECOVERY CENTER
+-- ============================================================
+
+local function recoveryCenter()
+    while true do
+        local items = {
+            "Validate Filesystem",
+            "Validate Bootfile",
+            "View Last Boot",
+            "File Manager",
+            "Reset BIOS Settings",
+            "Back"
+        }
+
+        local choice =
+            menu(items)
+
+        if not choice then
+            return
+        end
+
+        if choice == 1 then
+            local ok, reason =
+                validateFilesystem()
+
+            information(
+                "FILESYSTEM CHECK",
+                {
+                    ok and
+                        "STATUS: OK" or
+                        "STATUS: FAILED",
+                    reason
+                }
+            )
+
+        elseif choice == 2 then
+            local ok, reason =
+                validateBootfile()
+
+            information(
+                "BOOTFILE CHECK",
+                {
+                    ok and
+                        "STATUS: OK" or
+                        "STATUS: FAILED",
+                    reason
+                }
+            )
+
+        elseif choice == 3 then
+            lastBoot()
+
+        elseif choice == 4 then
+            fileManager()
+
+        elseif choice == 5 then
+            settings.secureBoot = true
+            settings.strictSecureBoot = false
+            settings.autoBoot = true
+            settings.bootDelay = 2
+
+            saveSettings()
+
+            information(
+                "SETTINGS RESET",
+                {
+                    "BIOS settings reset.",
+                    "Secure Boot: ON",
+                    "Strict Secure Boot: OFF",
+                    "Automatic Boot: ON"
+                }
+            )
+
+        elseif choice == 6 then
+            return
+        end
+    end
+end
+
+-- ============================================================
+-- BOOT MANAGER
+-- ============================================================
+
+local function bootManager()
+    while true do
+        local ok, reason =
+            validateBootfile()
+
+        local status
+
+        if ok then
+            status = "Bootfile: READY"
+        else
+            status = "Bootfile: ERROR"
+        end
+
+        local items = {
+            status,
+            "Boot bootfile",
+            "Validate bootfile",
+            "Back"
+        }
+
+        local choice =
+            menu(items)
+
+        if not choice then
+            return
+        end
+
+        if choice == 2 then
+            if ok then
+                saveLastBoot(
+                    "READY",
+                    "Boot Manager"
+                )
+
+                bootLog(
+                    "Boot Manager launching bootfile"
+                )
+
+                sleep(0.5)
+
+                shell.run(
+                    BOOTFILE
+                )
+
+                return
+            else
+                information(
+                    "BOOT ERROR",
+                    {
+                        reason,
+                        "",
+                        "The bootfile could not",
+                        "be started."
+                    }
+                )
+            end
+
+        elseif choice == 3 then
+            local valid, text =
+                validateBootfile()
+
+            information(
+                "BOOTFILE VALIDATION",
+                {
+                    valid and
+                        "STATUS: OK" or
+                        "STATUS: FAILED",
+                    text
+                }
+            )
+
+        elseif choice == 4 then
+            return
+        end
+    end
+end
+
+-- ============================================================
+-- SAFE MODE
+-- ============================================================
+
+local function safeMode()
+    clear()
+
+    center(
+        "MOON BIOS SAFE MODE",
+        2,
+        C.accent
+    )
+
+    line(3, "-")
+
+    local width, height = w()
+
+    local lines = {
+        "Safe Mode is active.",
+        "",
+        "Only BIOS recovery functions",
+        "are available.",
+        "",
+        "Bootfile will not be",
+        "automatically launched."
+    }
+
+    local y = 5
+
+    for _, text in ipairs(lines) do
+        if y < height - 1 then
+            term.setCursorPos(1, y)
+            term.setTextColor(C.fg)
+            term.write(
+                text:sub(1, width)
+            )
+            y = y + 1
+        end
+    end
+
+    term.setCursorPos(
+        1,
+        height
+    )
+
+    term.setTextColor(C.dim)
+    term.write(
+        "BACKSPACE = EXIT SAFE MODE"
+    )
+
+    while true do
+        local event, key =
+            os.pullEvent("key")
+
+        if key == keys.backspace then
+            return
+        end
+    end
+end
+
+-- ============================================================
+-- MAIN BIOS MENU
+-- ============================================================
+
+local function mainMenu()
+    while running do
+        local items = {
+            "Boot Manager",
+            "Recovery Center",
+            "Safe Mode",
+            "System Information",
+            "Last Boot Record",
+            "File Manager",
+            "BIOS Settings",
+            "Restart Computer"
+        }
+
+        local choice =
+            menu(items)
+
+        if not choice then
+            -- Backspace on the main menu
+            -- does nothing.
+        elseif choice == 1 then
+            bootManager()
+
+        elseif choice == 2 then
+            recoveryCenter()
+
+        elseif choice == 3 then
+            safeMode()
+
+        elseif choice == 4 then
+            systemInfo()
+
+        elseif choice == 5 then
+            lastBoot()
+
+        elseif choice == 6 then
+            fileManager()
+
+        elseif choice == 7 then
+            biosSettings()
+
+        elseif choice == 8 then
+            os.reboot()
+        end
+    end
+end
+
+-- ============================================================
+-- STARTUP
+-- ============================================================
+
+loadSettings()
+
+bootLog(
+    "Moon BIOS starting"
+)
+
+drawMoon()
+
+sleep(1)
+
+runPOST()
+
+-- ============================================================
+-- AUTOMATIC BOOT
+-- ============================================================
+
+local bootOK, bootReason =
+    validateBootfile()
+
+local secureOK, secureReason =
+    secureBootCheck()
+
+if settings.autoBoot
+and bootOK
+and secureOK then
+
+    clear()
+
+    center(
+        "Moon BIOS",
+        2,
+        C.accent
+    )
+
+    center(
+        "Booting...",
+        4,
+        C.fg
+    )
+
+    center(
+        "Press 1 during boot for BIOS",
+        6,
+        C.dim
+    )
+
+    local bootDeadline =
+        os.clock() + settings.bootDelay
+
+    local biosRequested = false
+
+    while os.clock() < bootDeadline do
+        local remaining =
+            bootDeadline - os.clock()
+
+        if remaining < 0 then
+            break
+        end
+
+        if remaining > 0 then
+            local timer =
+                os.startTimer(0.1)
+
+            while true do
+                local event, a =
+                    os.pullEvent()
+
+                if event == "key"
+                and a == keys.one then
+                    biosRequested = true
+                    break
+                end
+
+                if event == "timer"
+                and a == timer then
+                    break
+                end
+            end
+
+            if biosRequested then
+                break
+            end
+        end
+    end
+
+    if not biosRequested then
+        saveLastBoot(
+            "BOOTING",
+            "Automatic boot"
+        )
+
+        bootLog(
+            "Automatic booting bootfile"
+        )
+
+        shell.run(
+            BOOTFILE
+        )
+
+        saveLastBoot(
+            "RETURNED",
+            "Bootfile returned"
+        )
+    end
+end
+
+-- ============================================================
+-- BIOS
+-- ============================================================
+
+mainMenu()
