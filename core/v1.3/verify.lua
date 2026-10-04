@@ -1,20 +1,14 @@
 -- Moon BIOS Secure Boot verifier
--- Verifies the installed BIOS core and Moon Kernel against the installation manifest.
+-- Verifies the installed BIOS core, Moon Kernel, verifier and bootloader.
 
 local ROOT = "/.moonbios"
 local MANIFEST = ROOT .. "/manifest"
 
 local function sha256(data)
-    if textutils and textutils.sha256 then
+    if textutils and type(textutils.sha256) == "function" then
         return textutils.sha256(data)
     end
-    if fs and fs.getSize then
-        -- CC:Tweaked versions without textutils.sha256 cannot perform a
-        -- cryptographic verification. Refuse Secure Boot instead of using
-        -- a weak substitute.
-        return nil, "SHA-256 is unavailable in this CC:Tweaked version"
-    end
-    return nil, "SHA-256 unavailable"
+    return nil, "Secure Boot requires CC:Tweaked textutils.sha256"
 end
 
 local function read(path)
@@ -25,43 +19,56 @@ local function read(path)
     return data
 end
 
-local function fail(reason)
-    return false, reason
-end
+local function verifyFile(manifest, key, fallback)
+    local path = manifest[key:gsub("Hash$", "")] or fallback
+    local expected = manifest[key]
+    if not expected then return false, "manifest is missing " .. key end
 
-if not fs.exists(MANIFEST) then
-    return fail("Secure Boot: installation manifest is missing")
-end
-
-local raw = read(MANIFEST)
-if not raw then
-    return fail("Secure Boot: cannot read installation manifest")
-end
-
-local manifest = textutils.unserialize(raw)
-if type(manifest) ~= "table" then
-    return fail("Secure Boot: invalid installation manifest")
-end
-
-local files = {
-    { key = "coreHash", path = manifest.core or (ROOT .. "/core/bios.lua") },
-    { key = "kernelHash", path = manifest.kernel or (ROOT .. "/kernel.lua") }
-}
-
-for _, item in ipairs(files) do
-    local data, reason = read(item.path)
-    if not data then return fail("Secure Boot: " .. reason) end
+    local data, reason = read(path)
+    if not data then return false, reason end
 
     local digest, hashReason = sha256(data)
-    if not digest then return fail(hashReason) end
+    if not digest then return false, hashReason end
 
-    if not manifest[item.key] then
-        return fail("Secure Boot: manifest has no " .. item.key)
+    if digest ~= expected then
+        return false, "integrity check failed: " .. path
     end
 
-    if digest ~= manifest[item.key] then
-        return fail("Secure Boot: integrity check failed for " .. item.path)
-    end
+    return true
 end
 
-return true, "Secure Boot: all protected components verified"
+local function verify()
+    if not fs.exists(MANIFEST) then
+        return false, "Secure Boot: installation manifest is missing"
+    end
+
+    local raw, reason = read(MANIFEST)
+    if not raw then return false, "Secure Boot: " .. reason end
+
+    local manifest = textutils.unserialize(raw)
+    if type(manifest) ~= "table" then
+        return false, "Secure Boot: invalid installation manifest"
+    end
+
+    if manifest.secureBoot ~= true then
+        return false, "Secure Boot is not enabled in the installation manifest"
+    end
+
+    local checks = {
+        { "coreHash", "/.moonbios/core/bios.lua" },
+        { "kernelHash", "/.moonbios/kernel.lua" },
+        { "verifierHash", "/.moonbios/core/verify.lua" },
+        { "startupHash", "/startup" }
+    }
+
+    for _, check in ipairs(checks) do
+        local ok, err = verifyFile(manifest, check[1], check[2])
+        if not ok then
+            return false, "Secure Boot: " .. tostring(err)
+        end
+    end
+
+    return true, "Secure Boot: all protected components verified"
+end
+
+return verify
