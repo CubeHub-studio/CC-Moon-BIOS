@@ -2326,6 +2326,7 @@ local function recovery()
             "File Manager",
             "Diagnostics",
             "Last Boot Record",
+            "BIOS Settings",
             "Reset BIOS Settings",
             "Restart",
             "Shutdown",
@@ -2447,20 +2448,23 @@ local function recovery()
                 showLastBoot()
 
             elseif selected == 8 then
+                settings()
+
+            elseif selected == 9 then
                 resetConfig()
 
                 log(
                     "BIOS settings reset from recovery."
                 )
 
-            elseif selected == 9 then
+            elseif selected == 10 then
                 os.reboot()
 
-            elseif selected == 10 then
+            elseif selected == 11 then
                 os.shutdown()
 
-            elseif selected == 11 then
-                return
+            elseif selected == 12 then
+                return "bios"
             end
         end
     end
