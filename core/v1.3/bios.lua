@@ -2765,17 +2765,32 @@ log(
     "Moon BIOS v1.3 started."
 )
 
-if cfg.showLogo then
-    logo()
-end
-
-post()
-
 if cfg.safe then
 
     safeMode()
 
+elseif cfg.liveBoot and cfg.autoBoot then
+
+    -- LiveBoot replaces the normal logo/countdown boot screen.
+    -- The boot process gets a dedicated live log display instead.
+    if runBootFile(cfg.bootFile) then
+        saveLastBoot("success")
+    else
+        saveLastBoot("failed")
+        local result = recovery()
+
+        if result == "safe" then
+            safeMode()
+        end
+    end
+
 else
+
+    if cfg.showLogo then
+        logo()
+    end
+
+    post()
 
     local choice =
         countdown()
