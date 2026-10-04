@@ -166,7 +166,7 @@ local function registrationEnvironment()
         MOONBIOS_MOON_PHASE_AGE = phase.age,
         MOONBIOS_MOON_ICON = phase.icon
     }
-}
+end
 
 local function showRegistration()
     while true do
