@@ -22,6 +22,7 @@ end
 function Kernel.log(message)
     local line = "[KERNEL] " .. tostring(message)
     pcall(function()
+        fs.makeDir("/.moonbios")
         local f = fs.open("/.moonbios/kernel.log", "a")
         if f then
             f.writeLine(os.date("%Y-%m-%d %H:%M:%S") .. " | " .. line)
@@ -80,35 +81,40 @@ function Kernel.run(path, options)
     Kernel.setProcessState(pid, "starting")
     Kernel.log("Starting process " .. tostring(pid) .. ": " .. tostring(path))
 
-    local ok, result = pcall(function()
+    local ok, result, reason = pcall(function()
         if options.env and type(loadfile) == "function" then
-            local program, reason = loadfile(path, "t", options.env)
+            local program, loadReason = loadfile(path, "t", options.env)
             if not program then
-                return false, reason
+                return false, nil, loadReason
             end
 
             local success, value = pcall(program, table.unpack(options.args or {}))
             if not success then
-                return false, value
+                return false, nil, value
             end
 
-            return value ~= false, value
+            return value ~= false, value, nil
         end
 
-        return shell.run(path, table.unpack(options.args or {}))
+        local success = shell.run(path, table.unpack(options.args or {}))
+        return success, nil, nil
     end)
 
-    Kernel.setProcessState(pid, ok and "stopped" or "crashed")
-
-    if ok and result ~= false then
-        Kernel.log("Process " .. tostring(pid) .. " exited successfully.")
-    elseif ok then
-        Kernel.log("Process " .. tostring(pid) .. " returned failure.")
-    else
+    if not ok then
+        Kernel.setProcessState(pid, "crashed")
         Kernel.log("Process " .. tostring(pid) .. " crashed: " .. tostring(result))
+        return false, nil, result, pid
     end
 
-    return ok, result, pid
+    if result == false then
+        Kernel.setProcessState(pid, "failed")
+        Kernel.log("Process " .. tostring(pid) .. " failed: " .. tostring(reason or "returned failure"))
+        return false, nil, reason, pid
+    end
+
+    Kernel.setProcessState(pid, "stopped")
+    Kernel.log("Process " .. tostring(pid) .. " exited successfully.")
+    return true, result, nil, pid
 end
 
 function Kernel.panic(message)
