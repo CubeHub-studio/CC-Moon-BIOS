@@ -71,8 +71,48 @@ local config = {
     postEnabled = true,
     safeMode = false,
     secureBoot = false,
-    secureBootStrict = false
+    secureBootStrict = false,
+    liveBoot = true
 }
+
+-- ============================================================
+-- MOON KERNEL
+-- ============================================================
+
+local MoonKernel = {
+    VERSION = "Moon Kernel 1.0",
+    running = false,
+    nextPid = 1
+}
+
+function MoonKernel.init()
+    MoonKernel.running = true
+    MoonKernel.nextPid = 1
+    return true
+end
+
+function MoonKernel.log(message)
+    writeLog("[KERNEL] " .. tostring(message))
+end
+
+function MoonKernel.run(path)
+    local pid = MoonKernel.nextPid
+    MoonKernel.nextPid = pid + 1
+    MoonKernel.log("Starting process " .. tostring(pid) .. ": " .. tostring(path))
+    local ok, result = pcall(function()
+        return shell.run(path)
+    end)
+    if ok and result ~= false then
+        MoonKernel.log("Process " .. tostring(pid) .. " exited successfully.")
+    elseif ok then
+        MoonKernel.log("Process " .. tostring(pid) .. " returned failure.")
+    else
+        MoonKernel.log("Process " .. tostring(pid) .. " crashed: " .. tostring(result))
+    end
+    return ok, result, pid
+end
+
+MoonKernel.init()
 
 -- ============================================================
 -- TERMINAL HELPERS
@@ -2286,9 +2326,25 @@ local function attemptBoot()
     writeLog("Attempting to boot " .. path)
     writeHistory("BOOT - " .. path)
 
-    local ok, result = pcall(function()
-        return shell.run(path)
-    end)
+    if config.liveBoot then
+        clearScreen(C.black)
+        centerText(2, "MOON BIOS LIVEBOOT", C.lightBlue)
+        centerText(3, MoonKernel.VERSION, C.gray)
+        separator(4)
+        centerText(6, "[ OK ] Moon Kernel initialized", C.lime)
+        centerText(7, "[ BOOT ] Target: " .. path, C.white)
+        centerText(8, "[ BOOT ] Launching process...", C.yellow)
+        MoonKernel.log("LiveBoot: launching " .. path)
+    end
+
+    local ok, result, pid
+    if config.liveBoot then
+        ok, result, pid = MoonKernel.run(path)
+    else
+        ok, result = pcall(function()
+            return shell.run(path)
+        end)
+    end
 
     if not ok then
         writeLog("Boot crashed: " .. tostring(result))
@@ -2302,6 +2358,10 @@ local function attemptBoot()
         writeHistory("FAILED - " .. path)
 
         return false, "The boot program returned an error."
+    end
+
+    if config.liveBoot then
+        centerText(10, "[ OK ] Process " .. tostring(pid or "?") .. " exited normally.", C.lime)
     end
 
     writeLog("Boot completed.")
