@@ -29,8 +29,20 @@ if not fs.exists(MANIFEST) or not fs.exists(BIOS) then
     return
 end
 
-local ok, err = pcall(dofile, BIOS)
-if not ok then
-    stop("MOON BIOS FAILED TO START")
-    print(tostring(err))
+-- The CraftOS shell is provided to programs launched through shell.run.
+-- Start the BIOS through shell.run so POST and the boot manager receive the
+-- normal CraftOS shell environment instead of loading the BIOS with dofile.
+if shell and type(shell.run) == "function" then
+    local ok, err = pcall(shell.run, BIOS)
+    if not ok then
+        stop("MOON BIOS FAILED TO START")
+        print(tostring(err))
+    end
+else
+    -- Recovery fallback for non-standard environments.
+    local ok, err = pcall(dofile, BIOS)
+    if not ok then
+        stop("MOON BIOS FAILED TO START")
+        print(tostring(err))
+    end
 end
