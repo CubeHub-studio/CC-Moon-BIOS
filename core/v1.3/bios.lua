@@ -209,6 +209,54 @@ local function log(message)
 end
 
 -- ============================================================
+-- Moon Kernel
+-- ============================================================
+
+local kernel = nil
+
+local function kernelLog(message)
+    safeCall(function()
+        local f = fs.open("/.moonbios/kernel.log", "a")
+        if f then
+            f.writeLine(os.date("%Y-%m-%d %H:%M:%S") .. " | [KERNEL] " .. tostring(message))
+            f.close()
+        end
+    end)
+end
+
+local function loadKernel()
+    local path = "/.moonbios/kernel.lua"
+
+    if not fs.exists(path) then
+        return false, "Kernel file not found: " .. path
+    end
+
+    local ok, loaded = pcall(dofile, path)
+    if not ok then
+        kernel = nil
+        return false, loaded
+    end
+
+    if type(loaded) ~= "table" then
+        kernel = nil
+        return false, "Kernel did not return a table."
+    end
+
+    kernel = loaded
+
+    if type(kernel.init) == "function" then
+        local initOK, initResult = pcall(kernel.init, { liveBoot = cfg.liveBoot })
+        if not initOK then
+            kernel = nil
+            return false, initResult
+        end
+    end
+
+    kernelLog("Moon Kernel initialized: " .. tostring(kernel.VERSION or "unknown"))
+    return true
+end
+
+-- ============================================================
 -- Configuration
 -- ============================================================
 
