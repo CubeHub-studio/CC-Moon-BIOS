@@ -494,7 +494,8 @@ local function eventTest()
 end
 
 local function shellTest()
-    return type(shell) == "table"
+    return shell ~= nil
+        and shell.run ~= nil
         and type(shell.run) == "function"
 end
 
