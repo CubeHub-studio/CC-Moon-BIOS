@@ -28,15 +28,16 @@ if not fs.exists(VERIFY) then
     return
 end
 
-local ok, verifier = pcall(dofile, VERIFY)
-if not ok or type(verifier) ~= "function" then
+local loadOK, verifier, loadReason = pcall(loadfile, VERIFY, "t", _ENV)
+if not loadOK or type(verifier) ~= "function" then
     stop("SECURE BOOT VERIFIER FAILED TO LOAD")
+    print(tostring(loadReason or verifier))
     return
 end
 
-local verified, reason = verifier()
-if not verified then
-    stop(tostring(reason or "SECURE BOOT INTEGRITY CHECK FAILED"))
+local verifyOK, verified, reason = pcall(verifier)
+if not verifyOK or not verified then
+    stop(tostring(reason or verified or "SECURE BOOT INTEGRITY CHECK FAILED"))
     return
 end
 
