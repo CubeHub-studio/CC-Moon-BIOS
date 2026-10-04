@@ -81,7 +81,21 @@ function Kernel.run(path, options)
     Kernel.log("Starting process " .. tostring(pid) .. ": " .. tostring(path))
 
     local ok, result = pcall(function()
-        return shell.run(path)
+        if options.env and type(loadfile) == "function" then
+            local program, reason = loadfile(path, "t", options.env)
+            if not program then
+                return false, reason
+            end
+
+            local success, value = pcall(program, table.unpack(options.args or {}))
+            if not success then
+                return false, value
+            end
+
+            return value ~= false, value
+        end
+
+        return shell.run(path, table.unpack(options.args or {}))
     end)
 
     Kernel.setProcessState(pid, ok and "stopped" or "crashed")
