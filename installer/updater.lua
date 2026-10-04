@@ -4,6 +4,7 @@
 local ROOT = "/.moonbios"
 local MANIFEST = ROOT .. "/manifest"
 local BIOS = ROOT .. "/core/bios.lua"
+local KERNEL = ROOT .. "/kernel.lua"
 local TEMP = ROOT .. "/core/bios.lua.new"
 local BACKUP = ROOT .. "/core/bios.lua.backup"
 
@@ -46,7 +47,7 @@ end
 print("MOON BIOS UPDATER")
 print()
 print("Installed version: " .. tostring(version))
-print("Downloading update...")
+print("Downloading BIOS update...")
 
 local response = http.get(source)
 if not response then
@@ -56,6 +57,21 @@ end
 
 local data = response.readAll()
 response.close()
+
+print("Downloading Moon Kernel update...")
+local kernelResponse = http.get(BASE .. "core/v1.3/kernel.lua")
+if not kernelResponse then
+    stop("Could not download the Moon Kernel update.")
+    return
+end
+
+local kernelData = kernelResponse.readAll()
+kernelResponse.close()
+
+if not kernelData or kernelData == "" then
+    stop("Downloaded Moon Kernel is empty.")
+    return
+end
 
 if not data or data == "" then
     stop("Downloaded update is empty.")
@@ -74,6 +90,17 @@ out.close()
 if fs.exists(BACKUP) then fs.delete(BACKUP) end
 if fs.exists(BIOS) then fs.move(BIOS, BACKUP) end
 fs.move(TEMP, BIOS)
+
+local kernelBackup = KERNEL .. ".backup"
+if fs.exists(kernelBackup) then fs.delete(kernelBackup) end
+if fs.exists(KERNEL) then fs.move(KERNEL, kernelBackup) end
+local kernelOut = fs.open(KERNEL, "w")
+if not kernelOut then
+    stop("Could not write the Moon Kernel update.")
+    return
+end
+kernelOut.write(kernelData)
+kernelOut.close()
 
 manifest.updatedAt = os.epoch("utc")
 local mf = fs.open(MANIFEST, "w")
