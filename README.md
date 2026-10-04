@@ -19,7 +19,11 @@ The installer detects the computer type, selects the compatible release, creates
 
 The installer is intentionally the only supported way to create a Moon BIOS installation. This gives Moon BIOS a stable installation boundary for future modules, configuration, recovery, integrity checking, and upgrades.
 
+The repository also contains `moon-bios.pkg` and `.pkgignore`. The `.pkg` file describes the installer-first package workflow, while `.pkgignore` keeps repository-only documentation and development material out of a future CC-PKG build.
+
 ### CC PKG
+
+Moon BIOS is designed as an installer-backed package rather than a package that blindly replaces `/startup`. The package definition is kept in `moon-bios.pkg`, and `.pkgignore` defines files that are repository/build material rather than installed package content.
 
 If CC PKG is installed:
 
