@@ -4,6 +4,7 @@
 
 local ROOT = "/.moonbios"
 local CORE = ROOT .. "/core"
+local KERNEL = ROOT .. "/kernel.lua"
 local LEGACY = ROOT .. "/legacy"
 local MANIFEST = ROOT .. "/manifest"
 local INSTALLER = ROOT .. "/installer.lua"
@@ -132,6 +133,16 @@ if not write(CORE .. "/bios.lua", biosData) then
     return fail("Could not write the BIOS core.")
 end
 
+print("Installing Moon Kernel...")
+local kernelData, kernelReason = download(BASE .. "core/v1.3/kernel.lua")
+if not kernelData then
+    return fail("Could not download the Moon Kernel: " .. kernelReason)
+end
+
+if not write(KERNEL, kernelData) then
+    return fail("Could not write the Moon Kernel.")
+end
+
 print("Installing updater...")
 local updaterData, updaterReason = download(BASE .. "installer/updater.lua")
 if not updaterData then
@@ -173,7 +184,9 @@ local manifest = {
     device = device,
     installedAt = os.epoch("utc"),
     core = "/.moonbios/core/bios.lua",
-    updater = "/.moonbios/core/updater.lua"
+    updater = "/.moonbios/core/updater.lua",
+    kernel = "/.moonbios/kernel.lua",
+    kernelVersion = "1.0"
 }
 
 if not write(MANIFEST, textutils.serialize(manifest)) then
@@ -190,6 +203,7 @@ print()
 print("Installed files:")
 print("  /.moonbios/core/bios.lua")
 print("  /.moonbios/core/updater.lua")
+print("  /.moonbios/kernel.lua")
 print("  /.moonbios/manifest")
 print("  /startup")
 print("  /mooninstaller")
