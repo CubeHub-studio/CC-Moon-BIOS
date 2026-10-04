@@ -231,7 +231,7 @@ local function fitLine(text)
     )
 end
 
-local function clear(bg)
+function clear(bg)
     term.setBackgroundColor(bg or C.black)
     term.setTextColor(C.white)
     term.clear()
@@ -239,7 +239,7 @@ local function clear(bg)
     term.setCursorBlink(false)
 end
 
-local function writeAt(x, y, text, colour)
+function writeAt(x, y, text, colour)
     local w = terminalWidth()
 
     x = math.max(1, math.floor(x or 1))
@@ -258,7 +258,7 @@ local function writeAt(x, y, text, colour)
     )
 end
 
-local function center(y, text, colour)
+function center(y, text, colour)
     local w = terminalWidth()
 
     text = fitText(
@@ -283,7 +283,7 @@ local function center(y, text, colour)
     term.write(text)
 end
 
-local function line(y, colour)
+function line(y, colour)
     local w = terminalWidth()
 
     term.setCursorPos(
@@ -300,7 +300,7 @@ local function line(y, colour)
     )
 end
 
-local function footer(text)
+function footer(text)
     local h = terminalHeight()
 
     center(
@@ -310,7 +310,7 @@ local function footer(text)
     )
 end
 
-local function pause(message)
+function pause(message)
     footer(
         message or "ENTER = Continue"
     )
@@ -329,7 +329,7 @@ end
 -- Logging
 -- ============================================================
 
-local function log(message)
+function log(message)
     if not cfg.bootLog then
         return
     end
