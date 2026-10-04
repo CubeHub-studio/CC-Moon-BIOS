@@ -37,7 +37,8 @@ local cfg = {
     strict = false,
     animations = true,
     showLogo = true,
-    bootLog = true
+    bootLog = true,
+    liveBoot = true
 }
 
 -- ============================================================
@@ -222,7 +223,8 @@ local function defaultConfig()
         strict = false,
         animations = true,
         showLogo = true,
-        bootLog = true
+        bootLog = true,
+        liveBoot = true
     }
 end
 
@@ -320,6 +322,7 @@ local function loadConfig()
     cfg.animations = cfg.animations ~= false
     cfg.showLogo = cfg.showLogo ~= false
     cfg.bootLog = cfg.bootLog ~= false
+    cfg.liveBoot = cfg.liveBoot ~= false
 
     saveConfig()
 end
