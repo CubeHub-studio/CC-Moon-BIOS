@@ -10,8 +10,6 @@ local MANIFEST = ROOT .. "/manifest"
 local INSTALLER = ROOT .. "/installer.lua"
 
 local BASE = "https://raw.githubusercontent.com/CubeHub-studio/CC-Moon-BIOS/main/"
-local BOOTLOADER = "startup"
-local UPDATER = "updatemoonbios"
 
 local function fail(message)
     term.setTextColor(colors.red)
@@ -31,37 +29,27 @@ local function write(path, data)
 end
 
 local function download(url)
-    if not http then
-        return nil, "HTTP is unavailable"
-    end
+    if not http then return nil, "HTTP is unavailable" end
     local ok, response = pcall(http.get, url)
-    if not ok or not response then
-        return nil, "download failed"
-    end
+    if not ok or not response then return nil, "download failed" end
     local data = response.readAll()
     response.close()
-    if not data or data == "" then
-        return nil, "download was empty"
-    end
+    if not data or data == "" then return nil, "download was empty" end
     return data
+end
+
+local function hash(data)
+    if not textutils or type(textutils.sha256) ~= "function" then
+        return nil, "This CC:Tweaked version does not provide SHA-256; Secure Boot cannot be installed safely."
+    end
+    return textutils.sha256(data)
 end
 
 local function detect()
     local isPocket = type(pocket) == "table"
-    local advanced = false
-
-    if type(term.isColor) == "function" then
-        advanced = term.isColor()
-    end
-
-    if isPocket then
-        return "1.3-pocket", "pocket"
-    end
-
-    if advanced then
-        return "1.3", "advanced"
-    end
-
+    local advanced = type(term.isColor) == "function" and term.isColor()
+    if isPocket then return "1.3-pocket", "pocket" end
+    if advanced then return "1.3", "advanced" end
     return "1.3", "computer"
 end
 
@@ -87,7 +75,6 @@ if not http then
 end
 
 local version, device = detect()
-
 print("Device: " .. device)
 print("Version: Moon BIOS " .. version)
 print()
@@ -96,7 +83,6 @@ fs.makeDir(ROOT)
 fs.makeDir(CORE)
 fs.makeDir(LEGACY)
 
--- Preserve the current startup before replacing it.
 if fs.exists("/startup") and not fs.exists(LEGACY .. "/startup.backup") then
     print("Backing up existing startup...")
     if not backup("/startup", LEGACY .. "/startup.backup") then
@@ -111,21 +97,14 @@ else
     sourcePath = "core/v1.3/bios.lua"
 end
 
--- The regular payload is already stored in core/. The pocket payload is
--- assembled from its legacy source during the transition.
-local biosData
+local biosData, biosReason
 if version == "1.3-pocket" then
-    local data, reason = download("https://raw.githubusercontent.com/CubeHub-studio/CC-Moon-BIOS/71e375c32353637d68014db2fbc1a8297f070c86/versions/v1.3-pocket/startup")
-    if not data then
-        return fail("Could not download the pocket BIOS: " .. reason)
-    end
-    biosData = data
+    biosData, biosReason = download(BASE .. "versions/v1.3-pocket/startup")
 else
-    local data, reason = download(BASE .. sourcePath)
-    if not data then
-        return fail("Could not download the BIOS core: " .. reason)
-    end
-    biosData = data
+    biosData, biosReason = download(BASE .. sourcePath)
+end
+if not biosData then
+    return fail("Could not download the BIOS core: " .. biosReason)
 end
 
 print("Installing BIOS core...")
@@ -135,57 +114,59 @@ end
 
 print("Installing Moon Kernel...")
 local kernelData, kernelReason = download(BASE .. "core/v1.3/kernel.lua")
-if not kernelData then
-    return fail("Could not download the Moon Kernel: " .. kernelReason)
-end
+if not kernelData then return fail("Could not download the Moon Kernel: " .. kernelReason) end
+if not write(KERNEL, kernelData) then return fail("Could not write the Moon Kernel.") end
 
-if not write(KERNEL, kernelData) then
-    return fail("Could not write the Moon Kernel.")
-end
+print("Installing Secure Boot verifier...")
+local verifyData, verifyReason = download(BASE .. "core/v1.3/verify.lua")
+if not verifyData then return fail("Could not download the Secure Boot verifier: " .. verifyReason) end
+if not write(CORE .. "/verify.lua", verifyData) then return fail("Could not install the Secure Boot verifier.") end
 
 print("Installing updater...")
 local updaterData, updaterReason = download(BASE .. "installer/updater.lua")
-if not updaterData then
-    return fail("Could not download the updater: " .. updaterReason)
-end
-
-if not write(CORE .. "/updater.lua", updaterData) then
-    return fail("Could not write the updater.")
-end
-
-local updaterLauncher = 'shell.run("/.moonbios/core/updater.lua")\n'
-if not write("/updatemoonbios", updaterLauncher) then
+if not updaterData then return fail("Could not download the updater: " .. updaterReason) end
+if not write(CORE .. "/updater.lua", updaterData) then return fail("Could not write the updater.") end
+if not write("/updatemoonbios", 'shell.run("/.moonbios/core/updater.lua")\n') then
     return fail("Could not install the updater command.")
 end
 
 print("Installing bootloader...")
-local bootloaderData, bootloaderReason = download(BASE .. "installer/startup")
-if not bootloaderData then
-    return fail("Could not download the bootloader: " .. bootloaderReason)
-end
-
-if not write("/startup", bootloaderData) then
-    return fail("Could not install /startup.")
-end
+local bootloaderData, bootloaderReason = download(BASE .. "versions/v1.3/startup")
+if not bootloaderData then return fail("Could not download the bootloader: " .. bootloaderReason) end
+if not write("/startup", bootloaderData) then return fail("Could not install /startup.") end
 
 print("Installing installer command...")
-local installerData, installerReason = download(BASE .. "installer/installer.lua")
-if installerData then
-    write("/mooninstaller", installerData)
-else
-    -- The installer is still usable even if this convenience copy fails.
-    write("/mooninstaller", "-- Installer copy unavailable. Re-run installer.lua.\n")
-end
+local installerData = download(BASE .. "installer/installer.lua")
+if installerData then write("/mooninstaller", installerData) end
+
+local coreHash, hashReason = hash(biosData)
+if not coreHash then return fail(hashReason) end
+local kernelHash
+kernelHash, hashReason = hash(kernelData)
+if not kernelHash then return fail(hashReason) end
+local verifyHash
+verifyHash, hashReason = hash(verifyData)
+if not verifyHash then return fail(hashReason) end
+local startupHash
+startupHash, hashReason = hash(bootloaderData)
+if not startupHash then return fail(hashReason) end
 
 local manifest = {
-    format = 1,
+    format = 2,
     product = "Moon BIOS",
     version = version,
     device = device,
     installedAt = os.epoch("utc"),
+    secureBoot = true,
     core = "/.moonbios/core/bios.lua",
+    coreHash = coreHash,
     updater = "/.moonbios/core/updater.lua",
     kernel = "/.moonbios/kernel.lua",
+    kernelHash = kernelHash,
+    verifier = "/.moonbios/core/verify.lua",
+    verifierHash = verifyHash,
+    bootloader = "/startup",
+    startupHash = startupHash,
     kernelVersion = "1.0"
 }
 
@@ -198,15 +179,8 @@ print("========================================")
 print("       INSTALLATION COMPLETE")
 print("========================================")
 print()
-print("Moon BIOS " .. version .. " is installed.")
-print()
-print("Installed files:")
-print("  /.moonbios/core/bios.lua")
-print("  /.moonbios/core/updater.lua")
-print("  /.moonbios/kernel.lua")
-print("  /.moonbios/manifest")
-print("  /startup")
-print("  /mooninstaller")
+print("Moon BIOS " .. version .. " is installed with Secure Boot.")
+print("BIOS, Kernel, verifier, and bootloader hashes recorded.")
 print()
 print("The computer will restart in 3 seconds.")
 sleep(3)
