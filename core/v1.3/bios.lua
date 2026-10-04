@@ -1237,14 +1237,37 @@ end
 
 local function showKernelLog()
     local path = "/.moonbios/kernel.log"
+    clear()
+    center(2, "KERNEL LOG", C.lightBlue)
+    line(3, C.gray)
+
     if not fs.exists(path) then
-        clear()
-        center(2, "KERNEL LOG", C.lightBlue)
         center(7, "No kernel log available.", C.gray)
         pause()
         return
     end
-    viewFile(path)
+
+    local f = fs.open(path, "r")
+    if not f then
+        center(7, "Unable to read kernel log.", C.red)
+        pause()
+        return
+    end
+
+    local lines = {}
+    for entry in f.readAll():gmatch("[^\r\n]+") do
+        lines[#lines + 1] = entry
+    end
+    f.close()
+
+    local visible = math.max(1, terminalHeight() - 6)
+    local top = math.max(1, #lines - visible + 1)
+
+    for i = top, #lines do
+        writeAt(2, 4 + i - top, lines[i], C.white)
+    end
+
+    pause()
 end
 
 -- ============================================================
