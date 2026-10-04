@@ -114,7 +114,7 @@ end
 -- assembled from its legacy source during the transition.
 local biosData
 if version == "1.3-pocket" then
-    local data, reason = download(BASE .. "versions/v1.3-pocket/startup")
+    local data, reason = download("https://raw.githubusercontent.com/CubeHub-studio/CC-Moon-BIOS/71e375c32353637d68014db2fbc1a8297f070c86/versions/v1.3-pocket/startup")
     if not data then
         return fail("Could not download the pocket BIOS: " .. reason)
     end
