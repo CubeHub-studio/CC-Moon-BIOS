@@ -24,6 +24,8 @@ local CFG_FILE = "moonbios.cfg"
 local SEC_FILE = "moonbios.secure"
 local LOG_FILE = "moonbios.log"
 local LAST_FILE = "moonbios.last"
+local HISTORY_FILE = "moonbios.history"
+local REG_FILE = "moonbios.registration"
 
 local C = colors
 
@@ -47,6 +49,150 @@ local cfg = {
 
 local function safeCall(fn, ...)
     return pcall(fn, ...)
+end
+
+-- ============================================================
+-- Moon Phase / Easter Egg
+-- ============================================================
+
+local MOON_PHASES = {
+    { name = "New Moon", icon = "new" },
+    { name = "Waxing Crescent", icon = "waxing_crescent" },
+    { name = "First Quarter", icon = "first_quarter" },
+    { name = "Waxing Gibbous", icon = "waxing_gibbous" },
+    { name = "Full Moon", icon = "full" },
+    { name = "Waning Gibbous", icon = "waning_gibbous" },
+    { name = "Last Quarter", icon = "last_quarter" },
+    { name = "Waning Crescent", icon = "waning_crescent" }
+}
+
+local function moonPhase()
+    -- Known new moon: 2000-01-06 18:14 UTC.
+    local now = os.epoch and os.epoch("utc") or 0
+    local reference = 947182440000
+    local synodic = 29.530588853 * 86400000
+    local age = ((now - reference) % synodic) / 86400000
+    local index = math.floor((age / 29.530588853) * 8 + 0.5) % 8 + 1
+    local phase = MOON_PHASES[index]
+    return { age = age, index = index, name = phase.name, icon = phase.icon }
+end
+
+local function moonIcon(phase, y, colour)
+    phase = phase or moonPhase()
+    local icons = {
+        new = {"     ####     ","   ########   ","  ##########  ","  ##########  ","  ##########  ","   ########   ","     ####     "},
+        waxing_crescent = {"       ######","     ########","    #########","    #########","     ########","       ######","            "},
+        first_quarter = {"        ####  ","      ######  ","     #######  ","     #######  ","     #######  ","      ######  ","        ####  "},
+        waxing_gibbous = {"       ###### ","     #########","    ##########","    ##########","    ##########","     #########","       ###### "},
+        full = {"      ######  ","    ##########","   ###########","   ###########","   ###########","    ##########","      ######  "},
+        waning_gibbous = {"  ######      "," #########    ","##########    ","##########    ","##########    "," #########    ","  ######      "},
+        last_quarter = {"  ####        ","  ######      ","  #######     ","  #######     ","  #######     ","  ######      ","  ####        "},
+        waning_crescent = {"######        ","########      ","#########     ","#########     ","########      ","######        ","              "}
+    }
+    for i, row in ipairs(icons[phase.icon] or icons.full) do
+        center(y + i, row, colour or C.lightBlue)
+    end
+end
+
+-- ============================================================
+-- Registration
+-- ============================================================
+
+local registration = nil
+
+local function registrationId()
+    return "MOON-" .. tostring(os.getComputerID() or 0)
+end
+
+local function loadRegistration()
+    if not fs.exists(REG_FILE) then registration = nil return end
+    local ok, data = safeCall(function()
+        local f = fs.open(REG_FILE, "r")
+        if not f then return nil end
+        local raw = f.readAll()
+        f.close()
+        return textutils.unserialize(raw)
+    end)
+    registration = (ok and type(data) == "table") and data or nil
+end
+
+local function saveRegistration()
+    if not registration then return false end
+    local ok = safeCall(function()
+        local f = fs.open(REG_FILE, "w")
+        if not f then return false end
+        f.write(textutils.serialize(registration))
+        f.close()
+        return true
+    end)
+    return ok
+end
+
+local function registerComputer()
+    local phase = moonPhase()
+    registration = {
+        id = registrationId(),
+        computerId = os.getComputerID(),
+        label = os.getComputerLabel(),
+        registeredAt = os.date("%Y-%m-%d %H:%M:%S"),
+        bios = VERSION,
+        moonPhase = phase.name
+    }
+    saveRegistration()
+    log("Computer registered as " .. registration.id)
+end
+
+local function registrationEnvironment()
+    local phase = moonPhase()
+    local r = registration or {}
+    return {
+        MOONBIOS = {
+            version = VERSION,
+            registered = registration ~= nil,
+            registration = r,
+            computerId = os.getComputerID(),
+            computerLabel = os.getComputerLabel(),
+            moonPhase = phase.name,
+            moonPhaseAge = phase.age,
+            moonIcon = phase.icon
+        },
+        MOONBIOS_VERSION = VERSION,
+        MOONBIOS_REGISTERED = registration ~= nil,
+        MOONBIOS_REGISTRATION_ID = r.id,
+        MOONBIOS_REGISTRATION_DATE = r.registeredAt,
+        MOONBIOS_COMPUTER_ID = os.getComputerID(),
+        MOONBIOS_COMPUTER_LABEL = os.getComputerLabel(),
+        MOONBIOS_MOON_PHASE = phase.name,
+        MOONBIOS_MOON_PHASE_AGE = phase.age,
+        MOONBIOS_MOON_ICON = phase.icon
+    }
+}
+
+local function showRegistration()
+    while true do
+        clear()
+        center(2, "MOON BIOS REGISTRATION", C.lightBlue)
+        line(3, C.gray)
+        local r = registration
+        local phase = moonPhase()
+        writeAt(3, 5, "Status: " .. (r and "REGISTERED" or "NOT REGISTERED"), r and C.green or C.yellow)
+        writeAt(3, 6, "Computer ID: " .. tostring(os.getComputerID()), C.white)
+        writeAt(3, 7, "Label: " .. tostring(os.getComputerLabel() or "Not set"), C.white)
+        writeAt(3, 8, "Registration ID: " .. tostring(r and r.id or "Not registered"), C.white)
+        writeAt(3, 9, "Moon Phase: " .. phase.name, C.lightBlue)
+        writeAt(3, 10, "Moon Age: " .. string.format("%.2f", phase.age) .. " days", C.gray)
+        writeAt(3, 12, "> " .. (r and "Update Registration" or "Register Computer"), C.lime)
+        writeAt(3, 13, "  Back", C.white)
+        footer("ENTER Register/Update | DOWN Back | BACKSPACE Back")
+        local _, key = os.pullEvent("key")
+        if key == keys.enter then
+            registerComputer()
+        elseif key == keys.down then
+            return
+        elseif key == keys.backspace then
+            return
+        end
+    end
 end
 
 -- ============================================================
@@ -380,29 +526,8 @@ end
 -- ============================================================
 
 local function moonLogo(y, colour)
-    local moon = {
-        "             ######",
-        "           #######",
-        "        #########",
-        "      #########",
-        "     ########",
-        "    #######",
-        "    #####",
-        "     #######",
-        "      ########",
-        "       ########",
-        "        #########",
-        "           #######",
-        "             ######"
-    }
-
-    for i, row in ipairs(moon) do
-        center(
-            y + i,
-            row,
-            colour or C.lightBlue
-        )
-    end
+    local phase = moonPhase()
+    moonIcon(phase, y, colour or C.lightBlue)
 end
 
 -- ============================================================
@@ -433,6 +558,12 @@ local function logo()
     center(
         y + 16,
         VERSION,
+        C.gray
+    )
+
+    center(
+        y + 18,
+        "Moon: " .. moonPhase().name,
         C.gray
     )
 
@@ -997,6 +1128,14 @@ local function saveLastBoot(status)
             f.close()
         end
     end)
+
+    safeCall(function()
+        local f = fs.open(HISTORY_FILE, "a")
+        if f then
+            f.writeLine(os.date("%Y-%m-%d %H:%M:%S") .. "|" .. tostring(status) .. "|" .. tostring(cfg.bootFile))
+            f.close()
+        end
+    end)
 end
 
 local function showLastBoot()
@@ -1068,6 +1207,44 @@ local function showLastBoot()
     f.close()
 
     pause()
+end
+
+local function showBootHistory()
+    clear()
+    center(2, "BOOT HISTORY", C.lightBlue)
+    line(3, C.gray)
+    if not fs.exists(HISTORY_FILE) then
+        center(7, "No boot history yet.", C.gray)
+        pause()
+        return
+    end
+    local f = fs.open(HISTORY_FILE, "r")
+    if not f then
+        center(7, "Unable to read boot history.", C.red)
+        pause()
+        return
+    end
+    local lines = {}
+    for entry in f.readAll():gmatch("[^\r\n]+") do lines[#lines + 1] = entry end
+    f.close()
+    local visible = math.max(1, terminalHeight() - 7)
+    local top = math.max(1, #lines - visible + 1)
+    for i = top, #lines do
+        writeAt(2, 4 + i - top, lines[i], C.white)
+    end
+    pause()
+end
+
+local function showKernelLog()
+    local path = "/.moonbios/kernel.log"
+    if not fs.exists(path) then
+        clear()
+        center(2, "KERNEL LOG", C.lightBlue)
+        center(7, "No kernel log available.", C.gray)
+        pause()
+        return
+    end
+    viewFile(path)
 end
 
 -- ============================================================
@@ -1166,13 +1343,26 @@ local function runBootFile(path)
         clear()
     end
 
+    local env = registrationEnvironment()
+    setmetatable(env, { __index = _G })
+    env.shell = shell
+    env.term = term
+    env.MOONBIOS_LIVEBOOT = cfg.liveBoot
+
     local ok, result, pid =
         safeCall(
             function()
                 if kernel and kernel.run then
-                    return kernel.run(path, { liveBoot = true })
+                    return kernel.run(path, {
+                        liveBoot = cfg.liveBoot,
+                        env = env
+                    })
                 end
-                return shell.run(path)
+                local program, reason = loadfile(path, "t", env)
+                if not program then
+                    return false, reason
+                end
+                return true, program()
             end
         )
 
@@ -1228,6 +1418,10 @@ local function showSystemInfo()
 
     local info = {
         "BIOS: " .. VERSION,
+        "Moon Phase: "
+            .. moonPhase().name,
+        "Registration: "
+            .. (registration and registration.id or "Not registered"),
         "Computer ID: "
             .. tostring(os.getComputerID()),
         "Label: "
@@ -2048,6 +2242,8 @@ local function settings()
 
             "Create Integrity Record",
 
+            "Registration",
+
             "Reset BIOS Settings",
 
             "Back"
@@ -2196,13 +2392,16 @@ local function settings()
                 createIntegrityRecord()
 
             elseif selected == 13 then
+                showRegistration()
+
+            elseif selected == 14 then
                 resetConfig()
 
                 log(
                     "BIOS settings reset."
                 )
 
-            elseif selected == 14 then
+            elseif selected == 15 then
                 return
             end
         end
@@ -2326,6 +2525,8 @@ local function recovery()
             "File Manager",
             "Diagnostics",
             "Last Boot Record",
+            "Boot History",
+            "Kernel Log",
             "BIOS Settings",
             "Reset BIOS Settings",
             "Restart",
@@ -2448,22 +2649,28 @@ local function recovery()
                 showLastBoot()
 
             elseif selected == 8 then
-                settings()
+                showBootHistory()
 
             elseif selected == 9 then
+                showKernelLog()
+
+            elseif selected == 10 then
+                settings()
+
+            elseif selected == 11 then
                 resetConfig()
 
                 log(
                     "BIOS settings reset from recovery."
                 )
 
-            elseif selected == 10 then
+            elseif selected == 12 then
                 os.reboot()
 
-            elseif selected == 11 then
+            elseif selected == 13 then
                 os.shutdown()
 
-            elseif selected == 12 then
+            elseif selected == 14 then
                 return "bios"
             end
         end
@@ -2483,6 +2690,8 @@ local function biosMenu()
             "Boot Manager",
             "System Information",
             "Last Boot Record",
+            "Boot History",
+            "Kernel Log",
             "File Manager",
             "BIOS Settings",
             "Diagnostics Center",
@@ -2628,15 +2837,21 @@ local function biosMenu()
                 showLastBoot()
 
             elseif selected == 5 then
-                fileManager()
+                showBootHistory()
 
             elseif selected == 6 then
-                settings()
+                showKernelLog()
 
             elseif selected == 7 then
-                diagnostics()
+                fileManager()
 
             elseif selected == 8 then
+                settings()
+
+            elseif selected == 9 then
+                diagnostics()
+
+            elseif selected == 10 then
 
                 local result =
                     recovery()
@@ -2645,13 +2860,13 @@ local function biosMenu()
                     return "safe"
                 end
 
-            elseif selected == 9 then
+            elseif selected == 11 then
                 shell.run("shell")
 
-            elseif selected == 10 then
+            elseif selected == 12 then
                 os.reboot()
 
-            elseif selected == 11 then
+            elseif selected == 13 then
                 os.shutdown()
             end
         end
@@ -2755,6 +2970,7 @@ end
 -- ============================================================
 
 loadConfig()
+loadRegistration()
 
 local kernelOK, kernelError = loadKernel()
 if not kernelOK then
