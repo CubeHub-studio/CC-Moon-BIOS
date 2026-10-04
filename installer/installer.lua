@@ -142,6 +142,11 @@ if not write(CORE .. "/updater.lua", updaterData) then
     return fail("Could not write the updater.")
 end
 
+local updaterLauncher = 'shell.run("/.moonbios/core/updater.lua")\n'
+if not write("/updatemoonbios", updaterLauncher) then
+    return fail("Could not install the updater command.")
+end
+
 print("Installing bootloader...")
 local bootloaderData, bootloaderReason = download(BASE .. "installer/startup")
 if not bootloaderData then
