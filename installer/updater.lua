@@ -38,7 +38,7 @@ local version = manifest.version or "1.3"
 local source
 
 if version == "1.3-pocket" then
-    source = BASE .. "versions/v1.3-pocket/startup"
+    source = "https://raw.githubusercontent.com/CubeHub-studio/CC-Moon-BIOS/71e375c32353637d68014db2fbc1a8297f070c86/versions/v1.3-pocket/startup"
 else
     source = BASE .. "core/v1.3/bios.lua"
 end
