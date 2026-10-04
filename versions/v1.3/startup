@@ -1,27 +1,21 @@
--- Moon BIOS bootloader
+-- Moon BIOS secure bootloader
 -- Installed and maintained by the Moon BIOS Installer.
 
 local ROOT = "/.moonbios"
 local MANIFEST = ROOT .. "/manifest"
 local BIOS = ROOT .. "/core/bios.lua"
+local VERIFY = ROOT .. "/core/verify.lua"
 
 local function stop(message)
     term.setBackgroundColor(colors.black)
     term.setTextColor(colors.red)
     term.clear()
     term.setCursorPos(1, 1)
-    print("MOON BIOS")
+    print("MOON BIOS SECURE BOOT")
     print()
     print(message)
     print()
-    print("Moon BIOS must be installed with the installer.")
-    print()
-    print("Run:")
-    print("  mooninstaller")
-    print()
-    print("If the installer is missing:")
-    print("  wget https://raw.githubusercontent.com/CubeHub-studio/CC-Moon-BIOS/main/installer/installer.lua mooninstaller")
-    print("  mooninstaller")
+    print("Run mooninstaller to repair the installation.")
 end
 
 if not fs.exists(MANIFEST) or not fs.exists(BIOS) then
@@ -29,19 +23,32 @@ if not fs.exists(MANIFEST) or not fs.exists(BIOS) then
     return
 end
 
--- The CraftOS shell is provided to programs launched through shell.run.
--- Start the BIOS through shell.run so POST and the boot manager receive the
--- normal CraftOS shell environment instead of loading the BIOS with dofile.
+if not fs.exists(VERIFY) then
+    stop("SECURE BOOT VERIFIER NOT FOUND")
+    return
+end
+
+local ok, verifier = pcall(dofile, VERIFY)
+if not ok or type(verifier) ~= "function" then
+    stop("SECURE BOOT VERIFIER FAILED TO LOAD")
+    return
+end
+
+local verified, reason = verifier()
+if not verified then
+    stop(tostring(reason or "SECURE BOOT INTEGRITY CHECK FAILED"))
+    return
+end
+
 if shell and type(shell.run) == "function" then
-    local ok, err = pcall(shell.run, BIOS)
-    if not ok then
+    local started, err = pcall(shell.run, BIOS)
+    if not started then
         stop("MOON BIOS FAILED TO START")
         print(tostring(err))
     end
 else
-    -- Recovery fallback for non-standard environments.
-    local ok, err = pcall(dofile, BIOS)
-    if not ok then
+    local started, err = pcall(dofile, BIOS)
+    if not started then
         stop("MOON BIOS FAILED TO START")
         print(tostring(err))
     end
