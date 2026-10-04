@@ -1,0 +1,36 @@
+-- Moon BIOS bootloader
+-- Installed and maintained by the Moon BIOS Installer.
+
+local ROOT = "/.moonbios"
+local MANIFEST = ROOT .. "/manifest"
+local BIOS = ROOT .. "/core/bios.lua"
+
+local function stop(message)
+    term.setBackgroundColor(colors.black)
+    term.setTextColor(colors.red)
+    term.clear()
+    term.setCursorPos(1, 1)
+    print("MOON BIOS")
+    print()
+    print(message)
+    print()
+    print("Moon BIOS must be installed with the installer.")
+    print()
+    print("Run:")
+    print("  mooninstaller")
+    print()
+    print("If the installer is missing:")
+    print("  wget https://raw.githubusercontent.com/CubeHub-studio/CC-Moon-BIOS/main/installer/installer.lua mooninstaller")
+    print("  mooninstaller")
+end
+
+if not fs.exists(MANIFEST) or not fs.exists(BIOS) then
+    stop("INSTALLATION NOT FOUND")
+    return
+end
+
+local ok, err = pcall(dofile, BIOS)
+if not ok then
+    stop("MOON BIOS FAILED TO START")
+    print(tostring(err))
+end
