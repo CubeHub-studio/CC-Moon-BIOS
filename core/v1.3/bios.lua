@@ -1101,15 +1101,37 @@ local function runBootFile(path)
         .. path
     )
 
-    clear()
+    if cfg.liveBoot then
+        clear()
+        center(2, "MOON BIOS LIVEBOOT", C.lightBlue)
+        center(3, kernel and kernel.VERSION or "Moon Kernel unavailable", C.gray)
+        line(4, C.gray)
+        writeAt(3, 6, "[ OK ] Moon Kernel initialized", C.lime)
+        writeAt(3, 7, "[ BOOT ] Target: " .. path, C.white)
+        writeAt(3, 8, "[ BOOT ] Secure Boot: " .. (cfg.secure and "enabled" or "disabled"), C.white)
+        writeAt(3, 9, "[ BOOT ] Launching process...", C.yellow)
+        kernelLog("LiveBoot: launching " .. path)
+    else
+        clear()
+    end
 
-    local ok, result =
+    local ok, result, pid =
         safeCall(
             function()
+                if kernel and kernel.run then
+                    return kernel.run(path, { liveBoot = true })
+                end
                 return shell.run(path)
             end
         )
 
+    if cfg.liveBoot then
+        if ok and result ~= false then
+            writeAt(3, 11, "[ OK ] Process " .. tostring(pid or "?") .. " exited normally.", C.lime)
+        else
+            writeAt(3, 11, "[FAIL] Boot process failed.", C.red)
+        end
+    end
     if not ok then
         bootError(
             "Boot program crashed."
@@ -1966,6 +1988,13 @@ local function settings()
                     or "OFF"
                 ),
 
+            "LiveBoot: "
+                .. (
+                    cfg.liveBoot
+                    and "ON"
+                    or "OFF"
+                ),
+
             "Create Integrity Record",
 
             "Reset BIOS Settings",
@@ -2108,16 +2137,21 @@ local function settings()
                 saveConfig()
 
             elseif selected == 11 then
-                createIntegrityRecord()
+                cfg.liveBoot =
+                    not cfg.liveBoot
+                saveConfig()
 
             elseif selected == 12 then
+                createIntegrityRecord()
+
+            elseif selected == 13 then
                 resetConfig()
 
                 log(
                     "BIOS settings reset."
                 )
 
-            elseif selected == 13 then
+            elseif selected == 14 then
                 return
             end
         end
@@ -2666,6 +2700,11 @@ end
 -- ============================================================
 
 loadConfig()
+
+local kernelOK, kernelError = loadKernel()
+if not kernelOK then
+    log("Kernel unavailable: " .. tostring(kernelError))
+end
 
 log(
     "Moon BIOS v1.3 started."
