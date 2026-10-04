@@ -113,3 +113,33 @@ The installer architecture is designed so future Moon BIOS releases can add comp
 ## License
 
 This project is licensed under the LUNAR CUBES v1.0 License.
+
+## Boot Registration
+
+Moon BIOS can locally register a computer from **BIOS Settings → Registration**.
+
+When a boot file is launched by Moon BIOS, it receives registration and Moon information in its program environment:
+
+- `MOONBIOS` — table containing version, registration data, computer ID/label, and Moon phase data.
+- `MOONBIOS_VERSION`
+- `MOONBIOS_REGISTERED`
+- `MOONBIOS_REGISTRATION_ID`
+- `MOONBIOS_REGISTRATION_DATE`
+- `MOONBIOS_COMPUTER_ID`
+- `MOONBIOS_COMPUTER_LABEL`
+- `MOONBIOS_MOON_PHASE`
+- `MOONBIOS_MOON_PHASE_AGE`
+- `MOONBIOS_MOON_ICON`
+
+The Moon icon shown by the BIOS is selected from the current lunar phase as a small visual Easter egg. Registration is local to the computer; it does not send registration data to a server.
+
+## Phase 1
+
+The first Phase 1 improvements now include:
+
+- Moon Kernel log viewer.
+- Boot history.
+- Multiple Moon phase icons.
+- Current Moon phase Easter egg.
+- Local computer registration.
+- Registration variables exposed directly to the configured boot file.
