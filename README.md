@@ -2,68 +2,63 @@
 
 Moon BIOS is a BIOS-style boot environment for CC:Tweaked computers.
 
-## Install
+## Installation
 
-### Recommended: CC PKG
-
-If CC PKG is installed, use:
-
-```text
-pkg install moon-bios
-```
-
-CC PKG automatically selects the compatible Moon BIOS version:
-
-- `v1.3 pocket` → pocket computers
-- `v1.3` → regular computers
-- Any version whose name contains `pocket` is pocket-only.
-- All other version names are regular-computer versions.
-
-The regular-computer `v1.3` package currently serves the **v1.3 Fixed** source.
+**Moon BIOS now requires the Moon BIOS Installer.** Directly installing the BIOS core is no longer supported.
 
 ### Manual installation
 
-For a regular computer, the current v1.3 source can be installed with:
+On a CC:Tweaked computer with HTTP enabled:
 
-```lua
-wget https://raw.githubusercontent.com/CubeHub-studio/CC-Moon-BIOS/main/versions/v1.3/startup startup
-wget https://raw.githubusercontent.com/CubeHub-studio/CC-Moon-BIOS/main/versions/v1.3/updatemoonbios updatemoonbios
-reboot
-```
+~~~text
+wget https://raw.githubusercontent.com/CubeHub-studio/CC-Moon-BIOS/main/installer.lua installer
+installer
+~~~
 
-For the pocket version:
+The installer detects the computer type, selects the compatible release, creates the /.moonbios/ installation tree, installs the BIOS core and updater, installs the /startup bootloader, backs up an existing /startup, writes an installation manifest, and installs /mooninstaller for future reinstallation.
 
-```lua
-wget https://raw.githubusercontent.com/CubeHub-studio/CC-Moon-BIOS/main/versions/v1.3-pocket/startup startup
-wget https://raw.githubusercontent.com/CubeHub-studio/CC-Moon-BIOS/main/versions/v1.3-pocket/updatemoonbios updatemoonbios
-reboot
-```
+The installer is intentionally the only supported way to create a Moon BIOS installation. This gives Moon BIOS a stable installation boundary for future modules, configuration, recovery, integrity checking, and upgrades.
+
+### CC PKG
+
+If CC PKG is installed:
+
+~~~text
+pkg install moon-bios
+~~~
+
+CC PKG should launch the Moon BIOS installer rather than placing the BIOS core directly in /startup.
+
+## Installation layout
+
+A normal installation looks like:
+
+~~~text
+/
+├── startup
+├── mooninstaller
+└── .moonbios/
+    ├── core/
+    │   ├── bios.lua
+    │   └── updater.lua
+    ├── legacy/
+    │   └── startup.backup
+    └── manifest
+~~~
+
+`/startup` is only the bootloader. The actual BIOS lives under `/.moonbios/core/`.
+
+The bootloader refuses to start the BIOS if the installation manifest or BIOS core is missing. It directs the user to the installer instead.
 
 ## Updating
 
-### Using CC PKG
+Run:
 
-Update the package manager first if needed:
-
-```text
-pkg self-update
-```
-
-Then upgrade installed packages:
-
-```text
-pkg upgrade
-```
-
-### Using the Moon BIOS updater
-
-From the CC Shell, run:
-
-```text
+~~~text
 updatemoonbios
-```
+~~~
 
-The updater downloads the version-specific Moon BIOS files.
+The updater is installed as part of Moon BIOS and updates the installed core through the same installation architecture.
 
 ## Boot shortcuts
 
@@ -76,21 +71,40 @@ During the Moon BIOS boot countdown:
 
 Escape is not used as a BIOS GUI control.
 
-## Moon BIOS v1.3 Fixed
+## Releases
 
-The regular-computer `versions/v1.3/startup` source is synchronized with the **v1.3 Fixed** release source. This is the source served to CC PKG for the regular `v1.3` package.
+Current release sources are retained under:
 
-## Files
-
-```text
+~~~text
 versions/
 ├── v1.2-mini/
 ├── v1.2-advance/
 ├── v1.3/
 └── v1.3-pocket/
-```
+~~~
 
-Each version directory contains its `startup` and `updatemoonbios` files.
+The current v1.3 sources are kept as release payloads. New Moon BIOS versions can be added as installer-managed cores without changing the bootloader architecture.
+
+## Repository architecture
+
+~~~text
+installer/
+├── installer.lua
+├── startup
+└── updater.lua
+
+core/
+└── v1.3/
+    └── bios.lua
+
+versions/
+├── v1.2-mini/
+├── v1.2-advance/
+├── v1.3/
+└── v1.3-pocket/
+~~~
+
+The installer architecture is designed so future Moon BIOS releases can add components without putting everything into /startup.
 
 ## License
 
