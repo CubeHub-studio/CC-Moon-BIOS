@@ -15,6 +15,8 @@ run /mooninstaller
 
 # Package metadata and update support.
 provides moon-bios
+provides moon-kernel
+feature liveboot
 command mooninstaller
 command updatemoonbios
 
@@ -24,6 +26,7 @@ requires http
 
 # The installer owns these paths after installation.
 managed /.moonbios
+managed /.moonbios/kernel.lua
 managed /startup
 managed /mooninstaller
 managed /updatemoonbios
