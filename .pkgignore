@@ -1,0 +1,30 @@
+# CC-PKG build exclusions for Moon BIOS
+# Keep the package focused on the installer and release payloads.
+
+.git/
+.github/
+.gitignore
+
+# Documentation is distributed by GitHub, not installed onto the computer.
+README.md
+LICENSE
+CODE_OF_CONDUCT.md
+POLICIES.md
+CONTRIBUTING.md
+SECURITY.md
+SUPPORT.md
+
+# Development/audit material.
+captures/
+*.log
+*.tmp
+*.bak
+
+# Build/editor metadata.
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Historical package/build metadata.
+CATALOG-AUDIT.md
